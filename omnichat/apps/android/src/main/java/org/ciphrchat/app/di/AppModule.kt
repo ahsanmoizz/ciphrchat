@@ -23,7 +23,7 @@ object AppModule {
     @Provides
     @Singleton
     fun provideIdentityRepository(
-        implementation: PrototypeIdentityRepository
+        implementation: org.ciphrchat.app.identity.PersistentIdentityRepository
     ): IdentityRepository = implementation
 
     @Provides

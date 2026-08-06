@@ -5,10 +5,10 @@ import androidx.room.RoomDatabase
 
 // Currently empty, but schema will be added in subsequent plans
 @Database(
-    entities = [], // We will add IdentityEntity and MessageEntity later
+    entities = [IdentityEntity::class],
     version = 1,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
-    // DAO getters will be added here
+    abstract fun identityDao(): IdentityDao
 }
