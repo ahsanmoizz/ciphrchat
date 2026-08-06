@@ -1,0 +1,9 @@
+[package]
+name = "ciphrchat-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+ciphrchat-protocol = { path = "../ciphrchat-protocol" }
+ciphrchat-routing = { path = "../ciphrchat-routing" }
