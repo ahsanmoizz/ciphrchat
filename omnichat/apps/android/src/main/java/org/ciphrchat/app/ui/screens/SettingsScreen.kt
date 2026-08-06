@@ -14,7 +14,10 @@ import org.ciphrchat.app.ui.components.CiphrSectionHeader
 import org.ciphrchat.app.ui.theme.*
 
 @Composable
-fun SettingsScreen(onShareApp: () -> Unit = {}) {
+fun SettingsScreen(
+    onShareApp: () -> Unit = {},
+    onBackupIdentity: () -> Unit = {}
+) {
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
             .padding(horizontal = 24.dp)
@@ -26,7 +29,7 @@ fun SettingsScreen(onShareApp: () -> Unit = {}) {
         CiphrSectionHeader("Identity")
         SettingsRow("My QR code") {}
         SettingsRow("Display name") {}
-        SettingsRow("Back up identity") {}
+        SettingsRow("Back up identity") { onBackupIdentity() }
         SettingsRow("Restore identity") {}
 
         Spacer(Modifier.height(16.dp))

@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.androidx.sqlite)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.zxing.core)
 
     ksp(libs.hilt.compiler)
     ksp(libs.room.compiler)

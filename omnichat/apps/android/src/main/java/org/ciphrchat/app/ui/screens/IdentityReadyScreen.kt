@@ -79,19 +79,32 @@ fun IdentityReadyScreen(
 
                 Spacer(Modifier.height(16.dp))
 
-                // QR placeholder
-                Box(
-                    modifier = Modifier
-                        .size(140.dp)
-                        .background(CiphrSurfaceMuted, MaterialTheme.shapes.medium),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "QR Code\ncoming in Phase 2",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CiphrTextSecondary,
-                        textAlign = TextAlign.Center
+                var qrBitmap by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+                androidx.compose.runtime.LaunchedEffect(fingerprint) {
+                    val bmp = org.ciphrchat.app.identity.QrCodeGenerator.generate("ciphr:$fingerprint", 400)
+                    qrBitmap = bmp?.androidx.compose.ui.graphics.asImageBitmap()
+                }
+
+                if (qrBitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = qrBitmap!!,
+                        contentDescription = "Your QR Code",
+                        modifier = Modifier.size(140.dp)
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(140.dp)
+                            .background(CiphrSurfaceMuted, MaterialTheme.shapes.medium),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Generating QR...",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = CiphrTextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
