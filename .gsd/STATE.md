@@ -1,14 +1,15 @@
 # STATE.md — Project Memory
 
 > **Last Updated**: 2026-08-07
-> **Current Phase**: Phase 3 — Real Local Network
+> **Current Phase**: Phase 4 — Bluetooth
 > **Session**: Active (resumed 2026-08-07)
 
 ## Active Context
 
 - Phase 1 Foundation completed
 - Phase 2 Persistent Local Foundation completed and **VERIFIED**
-- Phase 3 Planning complete. Ready for execution.
+- Phase 3 Real Local Network completed and **VERIFIED**
+- Phase 4 Planning complete. Ready for execution.
 
 ## Decisions Made
 
