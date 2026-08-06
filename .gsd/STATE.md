@@ -1,15 +1,14 @@
 # STATE.md — Project Memory
 
 > **Last Updated**: 2026-08-07
-> **Current Phase**: Phase 2 — Persistent local foundation
+> **Current Phase**: Phase 3 — Real Local Network
 > **Session**: Active (resumed 2026-08-07)
 
 ## Active Context
 
-- Phase 1 Foundation completed (Android Compose UI, Rust workspace, Relay server scaffold)
-- ONE_HOUR_RESULT.md generated with mocked components documented
-- Executed Phase 1 gap closures (added ExternalTransportAdapter, downloaded Gradle wrapper)
-- Phase 2 Planning complete. Ready for execution.
+- Phase 1 Foundation completed
+- Phase 2 Persistent Local Foundation completed (SQLCipher, Android Keystore, QR codes)
+- Ready for Phase 3: Real Local Network (Wi-Fi Direct, Multicast DNS, etc.)
 
 ## Decisions Made
 
