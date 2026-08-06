@@ -29,30 +29,7 @@ class InternetRelayTransportAdapter @Inject constructor() : BaseMockTransportAda
 )
 
 
-@Singleton
-class WifiDirectTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.WIFI_DIRECT,
-    initialAvailability = TransportAvailability.PERMISSION_REQUIRED,
-    initialDetail = "Requires NEARBY_WIFI_DEVICES permission",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.LARGE_PAYLOAD,
-        TransportCapability.OFFLINE
-    )
-)
 
-@Singleton
-class WifiAwareTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.WIFI_AWARE,
-    initialAvailability = TransportAvailability.UNAVAILABLE,
-    initialDetail = "Wi-Fi Aware not detected on this device",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.OFFLINE
-    )
-)
 
 @Singleton
 class BluetoothTransportAdapter @Inject constructor() : BaseMockTransportAdapter(

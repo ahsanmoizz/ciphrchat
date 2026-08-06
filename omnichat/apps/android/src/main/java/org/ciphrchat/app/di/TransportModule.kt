@@ -8,6 +8,8 @@ import dagger.multibindings.IntoSet
 import org.ciphrchat.app.transport.TransportAdapter
 import org.ciphrchat.app.transport.adapters.*
 import org.ciphrchat.app.transport.lan.LanTransportAdapter
+import org.ciphrchat.app.transport.wifi.WifiDirectTransportAdapter
+import org.ciphrchat.app.transport.wifi.WifiAwareTransportAdapter
 
 @Module
 @InstallIn(SingletonComponent::class)
