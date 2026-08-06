@@ -29,6 +29,6 @@ object AppModule {
     @Provides
     @Singleton
     fun provideMessageRepository(
-        implementation: InMemoryMessageRepository
+        implementation: org.ciphrchat.app.messaging.PersistentMessageRepository
     ): MessageRepository = implementation
 }
