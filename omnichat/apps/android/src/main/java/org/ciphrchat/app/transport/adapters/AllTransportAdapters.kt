@@ -28,17 +28,6 @@ class InternetRelayTransportAdapter @Inject constructor() : BaseMockTransportAda
     )
 )
 
-@Singleton
-class LanTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.WIFI_LAN,
-    initialAvailability = TransportAvailability.AVAILABLE,
-    initialDetail = "Wi-Fi connected; LAN discovery scaffold",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.LARGE_PAYLOAD
-    )
-)
 
 @Singleton
 class WifiDirectTransportAdapter @Inject constructor() : BaseMockTransportAdapter(

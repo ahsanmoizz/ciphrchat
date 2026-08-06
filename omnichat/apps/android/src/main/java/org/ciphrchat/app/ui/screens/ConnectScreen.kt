@@ -12,7 +12,9 @@ import org.ciphrchat.app.ui.components.*
 import org.ciphrchat.app.ui.theme.*
 
 @Composable
-fun ConnectScreen() {
+fun ConnectScreen(
+    onScanQr: () -> Unit = {}
+) {
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
             .padding(horizontal = 24.dp)
@@ -23,7 +25,7 @@ fun ConnectScreen() {
 
         CiphrSectionHeader("Add someone")
         CiphrCard {
-            CiphrSecondaryButton("Scan QR", onClick = {})
+            CiphrSecondaryButton("Scan QR", onClick = onScanQr)
             Spacer(Modifier.height(8.dp))
             CiphrSecondaryButton("Show my QR", onClick = {})
             Spacer(Modifier.height(8.dp))

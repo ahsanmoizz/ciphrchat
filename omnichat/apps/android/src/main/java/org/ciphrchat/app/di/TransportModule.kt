@@ -7,6 +7,7 @@ import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoSet
 import org.ciphrchat.app.transport.TransportAdapter
 import org.ciphrchat.app.transport.adapters.*
+import org.ciphrchat.app.transport.lan.LanTransportAdapter
 
 @Module
 @InstallIn(SingletonComponent::class)
