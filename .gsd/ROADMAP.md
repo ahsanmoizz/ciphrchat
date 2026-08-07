@@ -14,11 +14,11 @@
 **Objective**: SQLCipher database, Android Keystore-wrapped database key, persistent identity, contact QR generation and scanning, persistent messages and queue, encrypted recovery file format.
 
 ### Phase 3: Real Local Network
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Shared LAN discovery, authenticated socket session, real Wi-Fi Direct, real Wi-Fi Aware, device-to-device test matrix.
 
 ### Phase 4: Bluetooth
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: BLE advertisements, GATT transfer, reliable chunking and ACKs, mesh envelope forwarding, hop limit, battery-aware operation.
 
 ### Phase 5: Internet P2P

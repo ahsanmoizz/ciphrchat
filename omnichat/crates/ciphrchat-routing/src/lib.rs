@@ -1,72 +1,36 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TransportKind {
-    InternetDirect,
-    WifiLan,
-    WifiAware,
-    WifiDirect,
-    BluetoothDirect,
-    BluetoothMesh,
-    Ultrasound,
-    Infrared,
-    InternetRelay,
-}
+use libp2p::{
+    core::upgrade,
+    identity, noise,
+    swarm::{SwarmBuilder, SwarmEvent},
+    tcp, yamux, PeerId, Transport,
+};
+use std::error::Error;
+use std::time::Duration;
 
-pub const DEFAULT_PRIORITY: &[TransportKind] = &[
-    TransportKind::InternetDirect,
-    TransportKind::WifiLan,
-    TransportKind::WifiAware,
-    TransportKind::WifiDirect,
-    TransportKind::BluetoothDirect,
-    TransportKind::BluetoothMesh,
-    TransportKind::Ultrasound,
-    TransportKind::Infrared,
-    TransportKind::InternetRelay,
-];
+pub async fn start_swarm() -> Result<(), Box<dyn Error>> {
+    let local_key = identity::Keypair::generate_ed25519();
+    let local_peer_id = PeerId::from(local_key.public());
+    println!("Local peer id: {:?}", local_peer_id);
 
-pub fn allowed_for_payload(kind: TransportKind, payload_bytes: usize) -> bool {
-    match kind {
-        TransportKind::Ultrasound | TransportKind::Infrared => payload_bytes <= 512,
-        TransportKind::BluetoothMesh => payload_bytes <= 16 * 1024,
-        _ => payload_bytes <= 64 * 1024,
-    }
-}
+    let tcp_transport = tcp::tokio::Transport::default()
+        .upgrade(upgrade::Version::V1Lazy)
+        .authenticate(noise::Config::new(&local_key)?)
+        .multiplex(yamux::Config::default())
+        .boxed();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // Use dummy behaviour for now
+    let behaviour = libp2p::swarm::dummy::Behaviour;
 
-    #[test]
-    fn priority_has_nine_entries() {
-        assert_eq!(DEFAULT_PRIORITY.len(), 9);
-    }
+    let mut swarm = SwarmBuilder::with_tokio_executor(tcp_transport, behaviour, local_peer_id).build();
 
-    #[test]
-    fn internet_is_first_priority() {
-        assert_eq!(DEFAULT_PRIORITY[0], TransportKind::InternetDirect);
-    }
+    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-    #[test]
-    fn relay_is_last_priority() {
-        assert_eq!(DEFAULT_PRIORITY[8], TransportKind::InternetRelay);
-    }
-
-    #[test]
-    fn ultrasound_rejects_large_payload() {
-        assert!(!allowed_for_payload(TransportKind::Ultrasound, 1024));
-    }
-
-    #[test]
-    fn ultrasound_accepts_small_payload() {
-        assert!(allowed_for_payload(TransportKind::Ultrasound, 256));
-    }
-
-    #[test]
-    fn internet_accepts_large_payload() {
-        assert!(allowed_for_payload(TransportKind::InternetDirect, 60 * 1024));
-    }
-
-    #[test]
-    fn bluetooth_mesh_rejects_oversized() {
-        assert!(!allowed_for_payload(TransportKind::BluetoothMesh, 20 * 1024));
+    loop {
+        match swarm.next().await {
+            Some(SwarmEvent::NewListenAddr { address, .. }) => {
+                println!("Listening on {:?}", address);
+            }
+            _ => {}
+        }
     }
 }

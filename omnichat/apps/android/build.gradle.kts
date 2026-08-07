@@ -41,6 +41,20 @@ android {
     }
 }
 
+tasks.register<Exec>("buildRust") {
+    // Only run if specifically requested to avoid breaking standard Gradle syncs without NDK
+    onlyIf { project.hasProperty("buildRust") }
+    workingDir = file("../../crates/ciphrchat-ffi")
+    commandLine = listOf("cargo", "ndk", "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64", "-o", "../../apps/android/src/main/jniLibs", "build", "--release")
+}
+
+tasks.whenTaskAdded {
+    if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
+        dependsOn("buildRust")
+    }
+}
+
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

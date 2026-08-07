@@ -1,12 +1,21 @@
-/// Returns the current CiphrChat protocol version.
-pub fn protocol_version() -> u16 {
-    1
-}
+use jni::JNIEnv;
+use jni::objects::{JClass};
+use tokio::runtime::Runtime;
+use std::thread;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn protocol_version_is_one() {
-        assert_eq!(super::protocol_version(), 1);
-    }
+#[no_mangle]
+pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_startSwarm(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    // Spawn a background thread to run the tokio runtime and the libp2p swarm
+    thread::spawn(|| {
+        if let Ok(rt) = Runtime::new() {
+            rt.block_on(async {
+                if let Err(e) = ciphrchat_routing::start_swarm().await {
+                    eprintln!("Swarm error: {:?}", e);
+                }
+            });
+        }
+    });
 }

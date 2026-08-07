@@ -4,17 +4,7 @@ import org.ciphrchat.app.transport.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
-@Singleton
-class InternetTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.INTERNET_DIRECT,
-    initialAvailability = TransportAvailability.AVAILABLE,
-    initialDetail = "Network available; real P2P not connected",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.LARGE_PAYLOAD
-    )
-)
+
 
 @Singleton
 class InternetRelayTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
@@ -31,30 +21,7 @@ class InternetRelayTransportAdapter @Inject constructor() : BaseMockTransportAda
 
 
 
-@Singleton
-class BluetoothTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.BLUETOOTH_DIRECT,
-    initialAvailability = TransportAvailability.PERMISSION_REQUIRED,
-    initialDetail = "Requires Bluetooth permissions",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.OFFLINE
-    )
-)
 
-@Singleton
-class BluetoothMeshTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.BLUETOOTH_MESH,
-    initialAvailability = TransportAvailability.EXPERIMENTAL,
-    initialDetail = "Mesh forwarding scaffold; not production ready",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.MULTI_HOP,
-        TransportCapability.OFFLINE
-    )
-)
 
 @Singleton
 class UltrasoundTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
