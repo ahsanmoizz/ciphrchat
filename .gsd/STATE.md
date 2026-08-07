@@ -1,7 +1,7 @@
 # STATE.md — Project Memory
 
 > **Last Updated**: 2026-08-07
-> **Current Phase**: Phase 4 — Bluetooth
+> **Current Phase**: Phase 5 — Internet P2P
 > **Session**: Active (resumed 2026-08-07)
 
 ## Active Context
@@ -9,7 +9,8 @@
 - Phase 1 Foundation completed
 - Phase 2 Persistent Local Foundation completed and **VERIFIED**
 - Phase 3 Real Local Network completed and **VERIFIED**
-- Phase 4 Planning complete. Ready for execution.
+- Phase 4 Bluetooth completed and **VERIFIED**
+- Phase 5 Planning complete. Ready for execution.
 
 ## Decisions Made
 
