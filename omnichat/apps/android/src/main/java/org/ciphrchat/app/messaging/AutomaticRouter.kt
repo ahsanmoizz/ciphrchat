@@ -5,13 +5,13 @@ import org.ciphrchat.app.transport.OutboundEnvelope
 import org.whispersystems.libsignal.SignalProtocolAddress
 import javax.inject.Inject
 import javax.inject.Singleton
-import org.ciphrchat.app.transport.TransportManager
+import org.ciphrchat.app.transport.TransportRegistry
 import kotlinx.coroutines.runBlocking
 
 @Singleton
 class AutomaticRouter @Inject constructor(
     private val signalSessionManager: SignalSessionManager,
-    private val transportManager: TransportManager
+    private val transportRegistry: TransportRegistry
 ) {
     fun encryptAndRoute(recipientTag: ByteArray, plaintext: ByteArray): OutboundEnvelope {
         val address = SignalProtocolAddress(String(recipientTag), 1)
@@ -28,7 +28,9 @@ class AutomaticRouter @Inject constructor(
         
         // Broadcast the envelope via the transport layer
         runBlocking {
-            transportManager.send(envelope)
+            transportRegistry.all().forEach { adapter ->
+                adapter.send(envelope)
+            }
         }
         
         return envelope
