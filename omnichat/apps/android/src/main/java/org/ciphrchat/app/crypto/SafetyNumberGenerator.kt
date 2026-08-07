@@ -31,6 +31,6 @@ class SafetyNumberGenerator @Inject constructor(
 
     fun getQrCodeData(fingerprint: Fingerprint): String {
         // Return raw binary representation or specialized URI for the QR code
-        return "ciphrchat:fingerprint?v=${fingerprint.displayText}"
+        return "ciphrchat:fingerprint?v=${fingerprint.displayableFingerprint.displayText}"
     }
 }

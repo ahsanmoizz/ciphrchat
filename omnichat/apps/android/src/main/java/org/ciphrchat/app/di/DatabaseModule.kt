@@ -22,7 +22,7 @@ object DatabaseModule {
         @ApplicationContext context: Context,
         keyManager: KeyManager
     ): AppDatabase {
-        net.zetetic.database.sqlcipher.SQLiteDatabase.loadLibs(context)
+        System.loadLibrary("sqlcipher")
         val passphrase = keyManager.getOrCreateDatabasePassphrase()
         val factory = SupportOpenHelperFactory(passphrase)
 
