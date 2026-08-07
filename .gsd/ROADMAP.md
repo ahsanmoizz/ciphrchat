@@ -34,5 +34,5 @@
 **Objective**: Ultrasound modem PoC, Reed-Solomon correction, infrared hardware experiments, UWB-assisted confirmation, NFC pairing.
 
 ### Phase 8: Release Hardening
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Fuzzing, threat-model review, dependency review, reproducible builds, signed APK, public bootstrap/relay deployment, security audit.
