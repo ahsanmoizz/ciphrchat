@@ -22,7 +22,8 @@ import org.ciphrchat.app.ui.theme.CiphrTextSecondary
 @Composable
 fun WelcomeScreen(
     onCreateIdentity: () -> Unit,
-    onRestore: () -> Unit
+    onRestore: () -> Unit,
+    restoreMessage: String? = null
 ) {
     Box(
         modifier = Modifier
@@ -91,6 +92,11 @@ fun WelcomeScreen(
                 color = CiphrTextSecondary,
                 textAlign = TextAlign.Center
             )
+
+            restoreMessage?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = CiphrTextSecondary, textAlign = TextAlign.Center)
+            }
 
             Spacer(Modifier.weight(1f))
 

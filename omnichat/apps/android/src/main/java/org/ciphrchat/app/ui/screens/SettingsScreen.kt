@@ -16,7 +16,8 @@ import org.ciphrchat.app.ui.theme.*
 @Composable
 fun SettingsScreen(
     onShareApp: () -> Unit = {},
-    onBackupIdentity: () -> Unit = {}
+    onBackupIdentity: () -> Unit = {},
+    backupMessage: String? = null
 ) {
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
@@ -25,6 +26,11 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         Text("Settings", style = MaterialTheme.typography.headlineLarge, color = CiphrText)
         Spacer(Modifier.height(24.dp))
+
+        backupMessage?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = CiphrTextSecondary)
+            Spacer(Modifier.height(8.dp))
+        }
 
         CiphrSectionHeader("Identity")
         SettingsRow("My QR code") {}

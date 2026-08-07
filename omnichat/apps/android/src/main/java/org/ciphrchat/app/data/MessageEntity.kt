@@ -34,8 +34,14 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY createdAtEpochMs DESC")
     fun getAllMessages(): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages ORDER BY createdAtEpochMs ASC")
+    fun getAllForBackup(): List<MessageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertMessageForRestore(message: MessageEntity)
 
     @Update
     suspend fun updateMessage(message: MessageEntity)

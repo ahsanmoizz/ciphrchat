@@ -30,6 +30,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts ORDER BY displayName COLLATE NOCASE")
     fun observeAll(): Flow<List<ContactEntity>>
 
+    @Query("SELECT * FROM contacts ORDER BY displayName COLLATE NOCASE")
+    fun getAllForBackup(): List<ContactEntity>
+
     @Query("SELECT * FROM contacts WHERE contactId = :contactId LIMIT 1")
     fun find(contactId: String): ContactEntity?
 

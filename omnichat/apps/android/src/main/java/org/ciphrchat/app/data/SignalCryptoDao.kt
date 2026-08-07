@@ -7,6 +7,9 @@ import androidx.room.Query
 
 @Dao
 interface SignalCryptoDao {
+    @Query("SELECT * FROM signal_identities")
+    fun getAllIdentitiesForBackup(): List<SignalIdentityEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun saveIdentity(entity: SignalIdentityEntity)
 
@@ -21,6 +24,9 @@ interface SignalCryptoDao {
 
     @Query("SELECT * FROM signal_prekeys ORDER BY preKeyId LIMIT 1")
     fun getAnyPreKey(): SignalPreKeyEntity?
+
+    @Query("SELECT * FROM signal_prekeys")
+    fun getAllPreKeysForBackup(): List<SignalPreKeyEntity>
 
     @Query("SELECT COUNT(*) FROM signal_prekeys WHERE preKeyId = :preKeyId")
     fun containsPreKey(preKeyId: Int): Int
@@ -37,6 +43,7 @@ interface SignalCryptoDao {
     @Query("SELECT * FROM signal_signed_prekeys")
     fun getAllSignedPreKeys(): List<SignalSignedPreKeyEntity>
 
+
     @Query("SELECT COUNT(*) FROM signal_signed_prekeys WHERE signedPreKeyId = :signedPreKeyId")
     fun containsSignedPreKey(signedPreKeyId: Int): Int
 
@@ -48,6 +55,9 @@ interface SignalCryptoDao {
 
     @Query("SELECT * FROM signal_sessions WHERE addressName = :addressName")
     fun getSession(addressName: String): SignalSessionEntity?
+
+    @Query("SELECT * FROM signal_sessions")
+    fun getAllSessionsForBackup(): List<SignalSessionEntity>
 
     @Query("SELECT COUNT(*) FROM signal_sessions WHERE addressName = :addressName")
     fun containsSession(addressName: String): Int
