@@ -26,7 +26,7 @@
 **Objective**: rust-libp2p peer identity, QUIC/TCP, bootstrap discovery, Kademlia, NAT reachability, hole punching, circuit relay, rendezvous data.
 
 ### Phase 6: Production Encryption
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Pinned libsignal adapter, session establishment, ratcheted messages, key-change detection, safety-number/QR verification, migration tests.
 
 ### Phase 7: Experimental Routes
