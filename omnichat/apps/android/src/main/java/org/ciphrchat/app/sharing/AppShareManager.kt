@@ -41,6 +41,6 @@ class AppShareManager @Inject constructor(
     }
 
     companion object {
-        const val OFFICIAL_DOWNLOAD_URL = "https://github.com/AhsanDevHub/CiphrChat/releases"
+        const val OFFICIAL_DOWNLOAD_URL = "https://github.com/ahsanmoizz/ciphrchat/releases"
     }
 }

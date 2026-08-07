@@ -6,26 +6,26 @@ CiphrChat is a minimal, open-source, local-first encrypted text messenger for An
 
 ## Status
 
-This is the Phase 1 foundation scaffold. See [docs/ONE_HOUR_RESULT.md](docs/ONE_HOUR_RESULT.md) for what is real vs. mocked.
+This is a development build: Android CI passes, but several restore, QR, nearby-device, and experimental transport actions are still prototype-level or placeholders. The public user guide is in the repository root at [README.md](../README.md).
 
 ## Build
 
 ### Android
 
 ```bash
-./gradlew :apps:android:assembleDebug
+./gradlew assembleDebug -PbuildRust
 ```
 
 ### Rust
 
 ```bash
-cd crates && cargo test --workspace
+cargo test --workspace
 ```
 
 ### Server
 
 ```bash
-cd services/bootstrap-relay && cargo check
+cargo check --manifest-path services/bootstrap-relay/Cargo.toml
 ```
 
 ## License
