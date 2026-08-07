@@ -21,9 +21,21 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        create("release") {
+            // Dummy config for CI validation. Real keys injected via env vars.
+            storeFile = file("keystore.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "dummy"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "dummy"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "dummy"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
