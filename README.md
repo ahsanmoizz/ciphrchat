@@ -37,9 +37,9 @@ On the first launch:
 3. Continue through **Enable connections** and **Identity ready**.
 4. Tap **Start messaging** to open the app.
 
-For Internet messaging, the APK must be built with the repository variable `CIPHRCHAT_RELAY_ADDRESS` set to the deployed relay multiaddress. Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
+For Internet messaging, first deploy the required relay and set the repository variable `CIPHRCHAT_RELAY_ADDRESS` to its multiaddress; follow the [deployment runbook](docs/DEPLOYMENT.md). Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
 
-The current verified local message routes are Internet/libp2p relay, LAN, Wi-Fi Direct, and Bluetooth GATT. IR, NFC, UWB, ultrasound, Wi-Fi Aware messaging, and Bluetooth mesh forwarding remain visibly experimental or unavailable until their authenticated inbound protocols and hardware test matrix are complete. See [production status](docs/PRODUCTION_STATUS.md) for the release gates.
+The current implemented routes are Internet/libp2p relay, LAN, Wi-Fi Direct, and Bluetooth GATT; the live Internet relay and hardware interoperability still require the release test matrix. IR, NFC, UWB, ultrasound, Wi-Fi Aware messaging, and Bluetooth mesh forwarding remain visibly experimental or unavailable until their authenticated inbound protocols and hardware test matrix are complete. See [production status](docs/PRODUCTION_STATUS.md) for the release gates.
 
 ## Build from source
 
