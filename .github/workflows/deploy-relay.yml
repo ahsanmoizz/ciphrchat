@@ -15,12 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Configure SSH
         env:
           VPS_SSH_KEY: ${{ secrets.CIPHRCHAT_VPS_SSH_KEY }}
         run: |
+          test -n "$VPS_SSH_KEY" || (echo "CIPHRCHAT_VPS_SSH_KEY is required" >&2; exit 1)
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/ciphrchat_vps"
           chmod 600 "$HOME/.ssh/ciphrchat_vps"
@@ -56,3 +57,23 @@ jobs:
           ssh -i "$HOME/.ssh/ciphrchat_vps" -p "$VPS_PORT" \
             -o StrictHostKeyChecking=accept-new "$target" \
             'cd /opt/ciphrchat-relay && docker compose up -d --build --remove-orphans && curl --fail --silent http://127.0.0.1:8080/health'
+
+      - name: Report relay identity and address
+        env:
+          VPS_HOST: ${{ secrets.CIPHRCHAT_VPS_HOST }}
+          VPS_USER: ${{ secrets.CIPHRCHAT_VPS_USER }}
+          VPS_PORT: ${{ secrets.CIPHRCHAT_VPS_PORT || '22' }}
+        run: |
+          set -eu
+          target="$VPS_USER@$VPS_HOST"
+          info=$(ssh -i "$HOME/.ssh/ciphrchat_vps" -p "$VPS_PORT" \
+            -o StrictHostKeyChecking=accept-new "$target" \
+            'curl --fail --silent http://127.0.0.1:8080/info')
+          echo "$info"
+          {
+            echo "### Relay identity"
+            echo '```json'
+            echo "$info"
+            echo '```'
+            echo "Use the returned peer ID with: \\`/ip4/$VPS_HOST/tcp/4001/p2p/<peerId>\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
