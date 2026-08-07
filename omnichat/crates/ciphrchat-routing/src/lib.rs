@@ -10,6 +10,7 @@ use libp2p::{
     rendezvous,
     identify,
     Multiaddr,
+    futures::StreamExt,
 };
 use std::error::Error;
 use std::time::Duration;

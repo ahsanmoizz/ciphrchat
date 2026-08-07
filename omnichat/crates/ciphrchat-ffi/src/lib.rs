@@ -4,9 +4,9 @@ use tokio::runtime::Runtime;
 use std::thread;
 
 #[no_mangle]
-pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_startSwarm(
-    _env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_startSwarm<'local>(
+    mut _env: JNIEnv<'local>,
+    _class: JClass<'local>,
 ) {
     // Spawn a background thread to run the tokio runtime and the libp2p swarm
     thread::spawn(|| {
@@ -21,10 +21,10 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
 }
 
 #[no_mangle]
-pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_publishMessage(
-    _env: JNIEnv,
-    _class: JClass,
-    _payload: jni::objects::JByteArray,
+pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_publishMessage<'local>(
+    mut _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    _payload: jni::objects::JByteArray<'local>,
 ) {
     // In a full implementation, this payload is sent to the running Tokio channel for Gossipsub
 }
