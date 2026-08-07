@@ -116,6 +116,11 @@ class WifiAwareService @Inject constructor(
     }
 
     suspend fun requestNetwork(recipientId: String): Network? = suspendCoroutine { cont ->
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            cont.resume(null)
+            return@suspendCoroutine
+        }
+
         val peerHandle = discoveredHandles[recipientId]
         if (peerHandle == null || awareSession == null) {
             cont.resume(null)
