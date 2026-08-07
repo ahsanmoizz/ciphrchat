@@ -24,19 +24,6 @@ class InternetRelayTransportAdapter @Inject constructor() : BaseMockTransportAda
 
 
 @Singleton
-class UltrasoundTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.ULTRASOUND,
-    initialAvailability = TransportAvailability.EXPERIMENTAL,
-    initialDetail = "Experimental; microphone permission required",
-    capabilities = setOf(
-        TransportCapability.DISCOVERY,
-        TransportCapability.SMALL_TEXT,
-        TransportCapability.PAIRING,
-        TransportCapability.OFFLINE
-    )
-)
-
-@Singleton
 class InfraredTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
     kind = TransportKind.INFRARED,
     initialAvailability = TransportAvailability.UNAVAILABLE,
