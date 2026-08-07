@@ -7,6 +7,7 @@ sealed class AppRoute(val route: String) {
     data object IdentityReady : AppRoute("identity_ready")
     data object Chats : AppRoute("chats")
     data object Connect : AppRoute("connect")
+    data object Scanner : AppRoute("scanner")
     data object Settings : AppRoute("settings")
     data object Chat : AppRoute("chat/{conversationId}") {
         fun create(conversationId: String) = "chat/$conversationId"

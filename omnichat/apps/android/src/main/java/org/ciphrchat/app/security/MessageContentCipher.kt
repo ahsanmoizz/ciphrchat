@@ -31,8 +31,8 @@ class MessageContentCipher @Inject constructor() {
         val buffer = ByteBuffer.wrap(encoded)
         val ivSize = buffer.get().toInt() and 0xff
         require(ivSize in 12..16) { "Invalid encrypted message" }
-        val iv = ByteArray(ivSize).also(buffer::get)
-        val ciphertext = ByteArray(buffer.remaining()).also(buffer::get)
+        val iv = ByteArray(ivSize).also { buffer.get(it) }
+        val ciphertext = ByteArray(buffer.remaining()).also { buffer.get(it) }
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
         return cipher.doFinal(ciphertext).toString(Charsets.UTF_8)

@@ -100,7 +100,7 @@ fun ScannerScreen(
                             try {
                                 val result = MultiFormatReader().decode(binaryBitmap)
                                 val text = result.text
-                                if (text.startsWith("ciphr:")) {
+                                if (text.startsWith("{")) {
                                     onScanResult(text)
                                 }
                             } catch (e: NotFoundException) {

@@ -6,6 +6,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ciphrchat.app.ui.components.*
@@ -13,8 +17,10 @@ import org.ciphrchat.app.ui.theme.*
 
 @Composable
 fun ConnectScreen(
-    onScanQr: () -> Unit = {}
+    onScanQr: () -> Unit = {},
+    onImportInvitation: (String) -> Unit = {}
 ) {
+    var invitation by remember { mutableStateOf("") }
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
             .padding(horizontal = 24.dp)
@@ -31,7 +37,18 @@ fun ConnectScreen(
             Spacer(Modifier.height(8.dp))
             CiphrSecondaryButton("Find nearby", onClick = {})
             Spacer(Modifier.height(8.dp))
-            CiphrSecondaryButton("Enter invitation", onClick = {})
+            OutlinedTextField(
+                value = invitation,
+                onValueChange = { invitation = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Paste invitation") },
+                minLines = 2
+            )
+            Spacer(Modifier.height(8.dp))
+            CiphrSecondaryButton(
+                "Pair invitation",
+                onClick = { onImportInvitation(invitation.trim()); invitation = "" }
+            )
         }
 
         Spacer(Modifier.height(24.dp))

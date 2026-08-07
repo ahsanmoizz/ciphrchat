@@ -16,6 +16,7 @@ import androidx.navigation.navArgument
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import org.ciphrchat.app.identity.IdentityRepository
+import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.ui.components.BottomNavItem
 import org.ciphrchat.app.ui.components.CiphrBottomBar
@@ -26,19 +27,51 @@ import javax.inject.Inject
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val identityRepository: IdentityRepository,
-    private val appState: AppState
+    private val appState: AppState,
+    private val invitationService: InvitationService
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
         private set
+    var invitation by mutableStateOf<String?>(null)
+        private set
+
+    init {
+        viewModelScope.launch {
+            identityRepository.current()?.let {
+                identity = it
+                invitationService.createInvitation().onSuccess { value -> invitation = value }
+            }
+        }
+    }
 
     fun createIdentity(name: String) {
         viewModelScope.launch {
-            identityRepository.create(name).onSuccess { identity = it }
+            identityRepository.create(name).onSuccess {
+                identity = it
+                invitationService.createInvitation().onSuccess { value -> invitation = value }
+            }
         }
     }
 
     fun finishOnboarding() { appState.completeOnboarding() }
     fun isOnboarded() = appState.isOnboarded
+}
+
+@HiltViewModel
+class ConnectViewModel @Inject constructor(
+    private val invitationService: InvitationService
+) : ViewModel() {
+    var status by mutableStateOf<String?>(null)
+        private set
+
+    fun importInvitation(raw: String) {
+        if (raw.isBlank()) return
+        viewModelScope.launch {
+            invitationService.importInvitation(raw)
+                .onSuccess { status = "Paired with ${it.displayName}" }
+                .onFailure { status = it.message ?: "Invitation could not be imported" }
+        }
+    }
 }
 
 @Composable
@@ -86,7 +119,8 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 IdentityReadyScreen(
                     displayName = id?.displayName ?: "User",
                     fingerprint = id?.fingerprint ?: "0000-0000-0000-0000",
-                    onShowQr = { /* Phase 2 */ },
+                    qrContent = viewModel.invitation,
+                    onShowQr = { /* QR is always visible */ },
                     onStartMessaging = {
                         viewModel.finishOnboarding()
                         navController.navigate(AppRoute.Chats.route) {
@@ -110,7 +144,23 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 }
                 ChatScreen(contactName = name, onBack = { navController.popBackStack() })
             }
-            composable(AppRoute.Connect.route) { ConnectScreen() }
+            composable(AppRoute.Scanner.route) {
+                val connectViewModel: ConnectViewModel = hiltViewModel()
+                ScannerScreen(
+                    onScanResult = { raw ->
+                        connectViewModel.importInvitation(raw)
+                        navController.popBackStack()
+                    },
+                    onCancel = { navController.popBackStack() }
+                )
+            }
+            composable(AppRoute.Connect.route) {
+                val connectViewModel: ConnectViewModel = hiltViewModel()
+                ConnectScreen(
+                    onScanQr = { navController.navigate(AppRoute.Scanner.route) },
+                    onImportInvitation = connectViewModel::importInvitation
+                )
+            }
             composable(AppRoute.Settings.route) { SettingsScreen() }
         }
     }

@@ -27,6 +27,7 @@ import org.ciphrchat.app.ui.theme.*
 fun IdentityReadyScreen(
     displayName: String,
     fingerprint: String,
+    qrContent: String? = null,
     onShowQr: () -> Unit,
     onStartMessaging: () -> Unit
 ) {
@@ -88,7 +89,9 @@ fun IdentityReadyScreen(
 
                 var qrBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
                 LaunchedEffect(fingerprint) {
-                    val bmp = org.ciphrchat.app.identity.QrCodeGenerator.generate("ciphr:$fingerprint", 400)
+                    val bmp = org.ciphrchat.app.identity.QrCodeGenerator.generate(
+                        qrContent ?: "ciphr:$fingerprint", 400
+                    )
                     qrBitmap = bmp?.asImageBitmap()
                 }
 
