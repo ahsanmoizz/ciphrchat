@@ -54,6 +54,8 @@ class PendingMessageRetryWorker @AssistedInject constructor(
                     message // remains QUEUED
                 }
                 is SendResult.Failed -> message.copy(status = MessageStatus.FAILED)
+                is SendResult.Failure -> message.copy(status = MessageStatus.FAILED)
+                SendResult.Success -> message.copy(status = MessageStatus.SENT)
             }
 
             if (updated != message) {

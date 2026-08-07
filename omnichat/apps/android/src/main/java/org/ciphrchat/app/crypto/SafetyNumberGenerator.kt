@@ -1,7 +1,7 @@
 package org.ciphrchat.app.crypto
 
 import org.whispersystems.libsignal.IdentityKey
-import org.whispersystems.libsignal.fingerprint.DisplayableFingerprint
+import org.whispersystems.libsignal.fingerprint.Fingerprint
 import org.whispersystems.libsignal.fingerprint.NumericFingerprintGenerator
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,7 +13,7 @@ class SafetyNumberGenerator @Inject constructor(
     fun generateFingerprint(
         remoteIdentifier: String,
         remoteIdentityKey: IdentityKey
-    ): DisplayableFingerprint {
+    ): Fingerprint {
         val generator = NumericFingerprintGenerator(5200)
         
         // In a real scenario, identifiers might be phone numbers or UUIDs.
@@ -29,7 +29,7 @@ class SafetyNumberGenerator @Inject constructor(
         )
     }
 
-    fun getQrCodeData(fingerprint: DisplayableFingerprint): String {
+    fun getQrCodeData(fingerprint: Fingerprint): String {
         // Return raw binary representation or specialized URI for the QR code
         return "ciphrchat:fingerprint?v=${fingerprint.displayText}"
     }

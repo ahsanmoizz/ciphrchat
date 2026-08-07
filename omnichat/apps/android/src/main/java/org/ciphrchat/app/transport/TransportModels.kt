@@ -62,8 +62,15 @@ data class DiscoveredPeer(
         displayName: String?,
         transportKind: TransportKind,
         reachabilityScore: Int,
-        lastSeenEpochMs: Long
-    ) : this(id, displayName, transportKind, reachabilityScore, lastSeenEpochMs)
+        lastSeenEpochMs: Long,
+        compatibility: Unit = Unit
+    ) : this(
+        ephemeralId = id,
+        displayHint = displayName,
+        transport = transportKind,
+        signalHint = reachabilityScore,
+        lastSeenEpochMs = lastSeenEpochMs
+    )
 
     val id: String get() = ephemeralId
     val displayName: String? get() = displayHint
@@ -103,6 +110,23 @@ data class OutboundEnvelope(
     /** Any envelope created by mock crypto must set testOnly = true */
     val testOnly: Boolean
 ) {
+    /** Compatibility constructor for the original prototype message envelope. */
+    constructor(
+        messageId: ByteArray,
+        recipientTag: ByteArray,
+        encryptedPayload: ByteArray,
+        hopLimit: Int
+    ) : this(
+        protocolVersion = 1,
+        messageId = messageId.decodeToString(),
+        recipientId = recipientTag.decodeToString(),
+        createdAtEpochMs = System.currentTimeMillis(),
+        expiresAtEpochMs = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L,
+        hopLimit = hopLimit,
+        encryptedPayload = encryptedPayload,
+        testOnly = true
+    )
+
     /** Compatibility property for socket transports that still consume a byte-array tag. */
     val recipientTag: ByteArray get() = recipientId.toByteArray()
 }

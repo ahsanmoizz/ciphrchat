@@ -19,7 +19,7 @@ class MeshRouter @Inject constructor() {
         }
 
         // Check if we've seen this message recently to prevent routing loops
-        val messageIdStr = String(envelope.messageId)
+        val messageIdStr = envelope.messageId
         if (seenMessageIds.contains(messageIdStr)) {
             return false
         }

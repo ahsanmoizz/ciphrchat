@@ -25,15 +25,17 @@ class AutomaticRouter @Inject constructor(
 
         for (adapter in adapters) {
             when (adapter.canReach(envelope.recipientId)) {
-                Reachability.Reachable -> {
+                Reachability.Reachable, Reachability.DIRECT, Reachability.MESH_PATH -> {
                     when (val result = adapter.send(envelope)) {
                         is SendResult.Accepted -> return result
                         is SendResult.Rejected -> failures += "${adapter.kind}: ${result.reason}"
                         is SendResult.Failed -> failures += "${adapter.kind}: ${result.error.message}"
+                        is SendResult.Failure -> failures += "${adapter.kind}: ${result.error.message}"
+                        SendResult.Success -> return SendResult.Accepted(adapter.kind, "prototype")
                     }
                 }
                 Reachability.Unknown -> failures += "${adapter.kind}: reachability unknown"
-                is Reachability.Unreachable -> failures += "${adapter.kind}: unreachable"
+                is Reachability.Unreachable, Reachability.UNREACHABLE -> failures += "${adapter.kind}: unreachable"
             }
         }
 

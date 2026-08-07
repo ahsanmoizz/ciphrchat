@@ -78,6 +78,8 @@ class InMemoryMessageRepository @Inject constructor(
             )
             is SendResult.Rejected -> replace(message.copy(status = MessageStatus.QUEUED))
             is SendResult.Failed -> replace(message.copy(status = MessageStatus.FAILED))
+            is SendResult.Failure -> replace(message.copy(status = MessageStatus.FAILED))
+            SendResult.Success -> replace(message.copy(status = MessageStatus.SENT))
         }
 
         message

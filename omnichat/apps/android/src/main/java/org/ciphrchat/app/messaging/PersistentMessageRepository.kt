@@ -92,6 +92,8 @@ class PersistentMessageRepository @Inject constructor(
             )
             is SendResult.Rejected -> entity.copy(status = MessageStatus.QUEUED)
             is SendResult.Failed -> entity.copy(status = MessageStatus.FAILED)
+            is SendResult.Failure -> entity.copy(status = MessageStatus.FAILED)
+            SendResult.Success -> entity.copy(status = MessageStatus.SENT)
         }
         dao.updateMessage(finalEntity)
 
