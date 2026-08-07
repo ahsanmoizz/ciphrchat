@@ -7,3 +7,11 @@ version.workspace = true
 [dependencies]
 libp2p = { version = "0.53", features = ["tcp", "quic", "noise", "yamux", "identify", "tokio", "macros", "kad", "autonat", "relay", "rendezvous", "dcutr"] }
 tokio = { version = "1", features = ["full"] }
+
+[features]
+server = []
+
+[[bin]]
+name = "ciphrchat-server"
+path = "src/main.rs"
+required-features = ["server"]
