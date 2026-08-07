@@ -1,9 +1,10 @@
 use libp2p::{
     core::upgrade,
     identity, noise,
-    swarm::{SwarmBuilder, SwarmEvent, NetworkBehaviour},
+    SwarmBuilder,
+    swarm::{SwarmEvent, NetworkBehaviour},
     tcp, yamux, PeerId, Transport,
-    kad::{store::MemoryStore, Kademlia},
+    kad::{store::MemoryStore, Behaviour as Kademlia},
     autonat,
     relay,
     dcutr,
@@ -30,28 +31,24 @@ pub async fn start_swarm() -> Result<(), Box<dyn Error>> {
     let local_peer_id = PeerId::from(local_key.public());
     println!("Local peer id: {:?}", local_peer_id);
 
-    let tcp_transport = tcp::tokio::Transport::default()
-        .upgrade(upgrade::Version::V1Lazy)
-        .authenticate(noise::Config::new(&local_key)?)
-        .multiplex(yamux::Config::default())
-        .boxed();
-
-    let (relay_transport, relay_client) = relay::client::new(local_peer_id);
-    let transport = relay_transport
-        .or_transport(tcp_transport)
-        .map(|fut, _| fut)
-        .boxed();
-
-    let behaviour = CiphrChatBehaviour {
-        kademlia: Kademlia::new(local_peer_id, MemoryStore::new(local_peer_id)),
-        autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
-        relay_client,
-        dcutr: dcutr::Behaviour::new(local_peer_id),
-        rendezvous: rendezvous::client::Behaviour::new(local_key.clone()),
-        identify: identify::Behaviour::new(identify::Config::new("/ciphrchat/1.0.0".into(), local_key.public())),
-    };
-
-    let mut swarm = SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
+    let mut swarm = SwarmBuilder::with_existing_identity(local_key.clone())
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )?
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
+        .with_behaviour(|_key, relay_client| CiphrChatBehaviour {
+            kademlia: Kademlia::new(local_peer_id, MemoryStore::new(local_peer_id)),
+            autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
+            relay_client,
+            dcutr: dcutr::Behaviour::new(local_peer_id),
+            rendezvous: rendezvous::client::Behaviour::new(local_key.clone()),
+            identify: identify::Behaviour::new(identify::Config::new("/ciphrchat/1.0.0".into(), local_key.public())),
+        })?
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+        .build();
 
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
