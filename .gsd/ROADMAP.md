@@ -36,3 +36,14 @@
 ### Phase 8: Release Hardening
 **Status**: ✅ Complete
 **Objective**: Fuzzing, threat-model review, dependency review, reproducible builds, signed APK, public bootstrap/relay deployment, security audit.
+
+### Phase 9: Gap Closure
+**Status**: ⬜ Not Started
+**Objective**: Address critical gaps from milestone audit (persistence, bridging, hardcoded mocks)
+
+**Gaps to Close:**
+- [ ] SignalStoreAdapter uses in-memory map instead of SQLCipher (Phase 6)
+- [ ] AutomaticRouter does not broadcast envelopes via TransportManager (Phase 6)
+- [ ] RecoveryManager uses weak SHA-256 instead of PBKDF2/Argon2 (Phase 2)
+- [ ] WifiAware uses hardcoded IP/PSK (Phase 3)
+- [ ] Missing JNI callbacks for Rust libp2p messages (Phase 5)
