@@ -94,6 +94,17 @@ fn dispatch_event(jvm: &JavaVM, event: ClientEvent) {
                 );
             }
         }
+        ClientEvent::RelayReservationReady { relay_peer_id } => {
+            if let Ok(relay_peer_id) = env.new_string(relay_peer_id.to_string()) {
+                let relay_peer_id_object: JObject<'_> = relay_peer_id.into();
+                call_callback(
+                    &mut env,
+                    "onRelayReservationReady",
+                    "(Ljava/lang/String;)V",
+                    &[JValue::Object(&relay_peer_id_object)],
+                );
+            }
+        }
         ClientEvent::InboundMessage { peer_id, payload } => {
             if let (Ok(peer_id), Ok(payload)) = (
                 env.new_string(peer_id.to_string()),

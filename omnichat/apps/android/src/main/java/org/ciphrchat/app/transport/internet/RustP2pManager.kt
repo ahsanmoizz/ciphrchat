@@ -11,6 +11,7 @@ import javax.inject.Singleton
 
 sealed interface RustNetworkEvent {
     data class SwarmReady(val peerId: String) : RustNetworkEvent
+    data class RelayReservationReady(val relayPeerId: String) : RustNetworkEvent
     data class MessageReceived(val peerId: String, val payload: ByteArray) : RustNetworkEvent
     data class DeliveryAccepted(val peerId: String, val messageId: String) : RustNetworkEvent
     data class DeliveryFailed(val peerId: String, val messageId: String, val reason: String) : RustNetworkEvent
@@ -69,6 +70,11 @@ class RustP2pManager @Inject constructor(
         @JvmStatic
         fun onSwarmReady(peerId: String) {
             active?._events?.tryEmit(RustNetworkEvent.SwarmReady(peerId))
+        }
+
+        @JvmStatic
+        fun onRelayReservationReady(relayPeerId: String) {
+            active?._events?.tryEmit(RustNetworkEvent.RelayReservationReady(relayPeerId))
         }
 
         @JvmStatic

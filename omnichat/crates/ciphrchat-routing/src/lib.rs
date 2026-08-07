@@ -47,6 +47,9 @@ pub enum ClientEvent {
     Ready {
         peer_id: PeerId,
     },
+    RelayReservationReady {
+        relay_peer_id: PeerId,
+    },
     InboundMessage {
         peer_id: PeerId,
         payload: Vec<u8>,
@@ -199,6 +202,11 @@ pub async fn run_client(
                             });
                         }
                         request_response::Event::ResponseSent { .. } => {}
+                    }
+                }
+                Some(SwarmEvent::Behaviour(CiphrChatBehaviourEvent::RelayClient(event))) => {
+                    if let relay::client::Event::ReservationReqAccepted { relay_peer_id, .. } = event {
+                        let _ = events.send(ClientEvent::RelayReservationReady { relay_peer_id });
                     }
                 }
                 Some(SwarmEvent::OutgoingConnectionError { peer_id, error, .. }) => {
