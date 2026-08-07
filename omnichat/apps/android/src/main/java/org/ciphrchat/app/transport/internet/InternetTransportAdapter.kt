@@ -2,6 +2,7 @@ package org.ciphrchat.app.transport.internet
 
 import android.util.Base64
 import org.ciphrchat.app.BuildConfig
+import org.ciphrchat.app.identity.ContactRepository
 import org.ciphrchat.app.transport.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,7 +13,8 @@ import javax.inject.Singleton
 
 @Singleton
 class InternetTransportAdapter @Inject constructor(
-    private val rustP2pManager: RustP2pManager
+    private val rustP2pManager: RustP2pManager,
+    private val contacts: ContactRepository
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.INTERNET_DIRECT
     override val capabilities: Set<TransportCapability> = setOf(
@@ -60,8 +62,9 @@ class InternetTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return if (started && recipientId.isNotBlank()) Reachability.Unknown
-        else Reachability.Unreachable("Internet relay client is not running")
+        if (!started) return Reachability.Unreachable("Internet relay client is not running")
+        return if (contacts.find(recipientId) != null) Reachability.Reachable
+        else Reachability.Unreachable("Contact has no Internet invitation")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
@@ -71,8 +74,13 @@ class InternetTransportAdapter @Inject constructor(
         if (envelope.testOnly) {
             return SendResult.Failed(IllegalStateException("Refusing to send a test-only envelope over the Internet"))
         }
+        val contact = contacts.find(envelope.recipientId)
+            ?: return SendResult.Rejected("Contact has not been paired")
+        if (!rustP2pManager.connectPeer(contact.peerId, contact.relayAddress)) {
+            return SendResult.Failed(IllegalStateException("Peer address was rejected by the native network"))
+        }
         val payload = envelope.toWirePayload()
-        return if (rustP2pManager.sendMessage(envelope.recipientId, payload)) {
+        return if (rustP2pManager.sendMessage(contact.peerId, payload)) {
             SendResult.Accepted(kind, "native-request-queued")
         } else {
             SendResult.Failed(IllegalStateException("Peer address is not registered or native transport is stopped"))

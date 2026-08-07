@@ -2,6 +2,8 @@ package org.ciphrchat.app.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,6 +17,29 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
+
+    private val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS contacts (
+                    contactId TEXT NOT NULL PRIMARY KEY,
+                    displayName TEXT NOT NULL,
+                    peerId TEXT NOT NULL,
+                    relayAddress TEXT NOT NULL,
+                    registrationId INTEGER NOT NULL,
+                    deviceId INTEGER NOT NULL,
+                    preKeyId INTEGER NOT NULL,
+                    preKey BLOB NOT NULL,
+                    signedPreKeyId INTEGER NOT NULL,
+                    signedPreKey BLOB NOT NULL,
+                    signedPreKeySignature BLOB NOT NULL,
+                    identityKey BLOB NOT NULL,
+                    verified INTEGER NOT NULL,
+                    createdAtEpochMs INTEGER NOT NULL
+                )
+            """.trimIndent())
+        }
+    }
 
     @Provides
     @Singleton
@@ -32,6 +57,7 @@ object DatabaseModule {
             "ciphrchat-secure.db"
         )
         .openHelperFactory(factory)
+        .addMigrations(MIGRATION_2_3)
         .build()
     }
 }

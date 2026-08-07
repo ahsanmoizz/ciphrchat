@@ -1,15 +1,17 @@
 package org.ciphrchat.app.messaging
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
+import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.MessageEntity
+import org.ciphrchat.app.identity.ContactRepository
+import org.ciphrchat.app.identity.InvitationCodec
+import org.ciphrchat.app.security.MessageContentCipher
 import org.ciphrchat.app.transport.AutomaticRouter
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
+import org.whispersystems.libsignal.SignalProtocolAddress
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,41 +19,29 @@ import javax.inject.Singleton
 @Singleton
 class PersistentMessageRepository @Inject constructor(
     private val database: AppDatabase,
-    private val router: AutomaticRouter
+    private val router: AutomaticRouter,
+    private val contacts: ContactRepository,
+    private val sessions: SignalSessionManager,
+    private val contentCipher: MessageContentCipher
 ) : MessageRepository {
 
     private val dao = database.messageDao()
-    private val scope = CoroutineScope(Dispatchers.IO)
 
-    init {
-        scope.launch {
-            if (dao.countMessages() == 0) {
-                seedMessages()
-            }
-        }
+    override fun conversations(): Flow<List<ConversationSummary>> = dao.getAllMessages().map { messages ->
+        messages.groupBy { it.conversationId }.map { (conversationId, items) ->
+            val last = items.maxByOrNull { it.createdAtEpochMs }
+            ConversationSummary(
+                id = conversationId,
+                contactName = contactName(conversationId),
+                contactId = last?.recipientId ?: conversationId,
+                lastMessage = last?.let(::decryptBody).orEmpty(),
+                lastMessageEpochMs = last?.createdAtEpochMs ?: 0L
+            )
+        }.sortedByDescending { it.lastMessageEpochMs }
     }
 
-    override fun conversations(): Flow<List<ConversationSummary>> {
-        return dao.getAllMessages().map { messages ->
-            val grouped = messages.groupBy { it.conversationId }
-            grouped.map { (convId, msgs) ->
-                val last = msgs.maxByOrNull { it.createdAtEpochMs }
-                ConversationSummary(
-                    id = convId,
-                    contactName = contactName(convId),
-                    contactId = "contact:$convId",
-                    lastMessage = last?.body.orEmpty(),
-                    lastMessageEpochMs = last?.createdAtEpochMs ?: 0L
-                )
-            }.sortedByDescending { it.lastMessageEpochMs }
-        }
-    }
-
-    override fun messages(conversationId: String): Flow<List<ChatMessage>> {
-        return dao.getMessagesForConversation(conversationId).map { entities ->
-            entities.map { it.toModel() }
-        }
-    }
+    override fun messages(conversationId: String): Flow<List<ChatMessage>> =
+        dao.getMessagesForConversation(conversationId).map { entities -> entities.map { it.toModel() } }
 
     override suspend fun send(
         conversationId: String,
@@ -61,12 +51,20 @@ class PersistentMessageRepository @Inject constructor(
         require(text.isNotBlank()) { "Message cannot be empty" }
         require(text.length <= 4_000) { "Message is too long" }
 
+        val contact = contacts.find(recipientId)
+            ?: error("Contact is not paired: scan or enter their invitation first")
+        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+        if (!sessions.hasSession(address)) {
+            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+        }
+        val trimmed = text.trim()
+        val ciphertext = sessions.encryptMessage(address, trimmed.toByteArray(Charsets.UTF_8))
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
             conversationId = conversationId,
             senderId = "local",
             recipientId = recipientId,
-            body = text.trim(),
+            body = contentCipher.encrypt(trimmed),
             createdAtEpochMs = System.currentTimeMillis(),
             direction = MessageDirection.OUTGOING,
             status = MessageStatus.QUEUED,
@@ -81,22 +79,17 @@ class PersistentMessageRepository @Inject constructor(
             createdAtEpochMs = entity.createdAtEpochMs,
             expiresAtEpochMs = entity.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
             hopLimit = 3,
-            encryptedPayload = text.encodeToByteArray(),
-            testOnly = true
+            encryptedPayload = ciphertext.serialize(),
+            testOnly = false
         )
-
         val finalEntity = when (val result = router.route(envelope)) {
-            is SendResult.Accepted -> entity.copy(
-                status = MessageStatus.SENT,
-                selectedTransport = result.transport.name
-            )
+            is SendResult.Accepted -> entity.copy(status = MessageStatus.SENT, selectedTransport = result.transport.name)
             is SendResult.Rejected -> entity.copy(status = MessageStatus.QUEUED)
             is SendResult.Failed -> entity.copy(status = MessageStatus.FAILED)
             is SendResult.Failure -> entity.copy(status = MessageStatus.FAILED)
             SendResult.Success -> entity.copy(status = MessageStatus.SENT)
         }
         dao.updateMessage(finalEntity)
-
         finalEntity.toModel()
     }
 
@@ -105,79 +98,16 @@ class PersistentMessageRepository @Inject constructor(
         conversationId = conversationId,
         senderId = senderId,
         recipientId = recipientId,
-        body = body,
+        body = decryptBody(this),
         createdAtEpochMs = createdAtEpochMs,
         direction = direction,
         status = status,
         selectedTransport = selectedTransport
     )
 
-    private fun contactName(conversationId: String): String = when (conversationId) {
-        "conv-sara" -> "Sara"
-        "conv-ali" -> "Ali"
-        "conv-usman" -> "Usman"
-        else -> "Unknown"
-    }
+    private fun contactName(conversationId: String): String = "Contact ${conversationId.takeLast(8)}"
 
-    private suspend fun seedMessages() {
-        val now = System.currentTimeMillis()
-        val seed = listOf(
-            MessageEntity(
-                id = "seed-1",
-                conversationId = "conv-sara",
-                senderId = "contact:conv-sara",
-                recipientId = "local",
-                body = "Hey! Have you tried CiphrChat yet?",
-                createdAtEpochMs = now - 3600_000,
-                direction = MessageDirection.INCOMING,
-                status = MessageStatus.DELIVERED,
-                selectedTransport = null
-            ),
-            MessageEntity(
-                id = "seed-2",
-                conversationId = "conv-sara",
-                senderId = "local",
-                recipientId = "contact:conv-sara",
-                body = "Yes! It works over Bluetooth too 🔥",
-                createdAtEpochMs = now - 3500_000,
-                direction = MessageDirection.OUTGOING,
-                status = MessageStatus.DELIVERED,
-                selectedTransport = "INTERNET_DIRECT"
-            ),
-            MessageEntity(
-                id = "seed-3",
-                conversationId = "conv-ali",
-                senderId = "contact:conv-ali",
-                recipientId = "local",
-                body = "Send me the APK when you get a chance",
-                createdAtEpochMs = now - 7200_000,
-                direction = MessageDirection.INCOMING,
-                status = MessageStatus.DELIVERED,
-                selectedTransport = null
-            ),
-            MessageEntity(
-                id = "seed-4",
-                conversationId = "conv-usman",
-                senderId = "local",
-                recipientId = "contact:conv-usman",
-                body = "Meeting at 5?",
-                createdAtEpochMs = now - 86400_000,
-                direction = MessageDirection.OUTGOING,
-                status = MessageStatus.SENT,
-                selectedTransport = "WIFI_LAN"
-            ),
-            MessageEntity(
-                id = "seed-5",
-                conversationId = "conv-usman",
-                senderId = "contact:conv-usman",
-                recipientId = "local",
-                body = "Sure, see you there",
-                createdAtEpochMs = now - 86000_000,
-                direction = MessageDirection.INCOMING,
-                status = MessageStatus.DELIVERED,
-                selectedTransport = null
-            )
-        )
-        seed.forEach { dao.insertMessage(it) }
-    }
+    private fun decryptBody(entity: MessageEntity): String = runCatching {
+        contentCipher.decrypt(entity.body)
+    }.getOrElse { "Encrypted message" }
 }

@@ -23,27 +23,33 @@ class SignalStoreAdapter @Inject constructor(
 
     private val dao = database.signalCryptoDao()
 
-    init {
-        // Initialize local state if it doesn't exist
-        if (dao.getLocalState() == null) {
-            val identityKeyPair = KeyHelper.generateIdentityKeyPair()
-            val registrationId = KeyHelper.generateRegistrationId(false)
-            dao.saveLocalState(SignalLocalStateEntity(
-                id = 1,
-                identityKeyPair = identityKeyPair.serialize(),
-                registrationId = registrationId
-            ))
+    private val initializationLock = Any()
+
+    private fun ensureInitialized() {
+        if (dao.getLocalState() != null) return
+        synchronized(initializationLock) {
+            if (dao.getLocalState() == null) {
+                val identityKeyPair = KeyHelper.generateIdentityKeyPair()
+                val registrationId = KeyHelper.generateRegistrationId(false)
+                dao.saveLocalState(SignalLocalStateEntity(
+                    id = 1,
+                    identityKeyPair = identityKeyPair.serialize(),
+                    registrationId = registrationId
+                ))
+            }
         }
     }
 
     // -- IdentityKeyStore --
 
     override fun getIdentityKeyPair(): IdentityKeyPair {
+        ensureInitialized()
         val state = dao.getLocalState() ?: throw IllegalStateException("Local state not initialized")
         return IdentityKeyPair(state.identityKeyPair)
     }
 
     override fun getLocalRegistrationId(): Int {
+        ensureInitialized()
         val state = dao.getLocalState() ?: throw IllegalStateException("Local state not initialized")
         return state.registrationId
     }
@@ -95,6 +101,8 @@ class SignalStoreAdapter @Inject constructor(
         dao.removePreKey(preKeyId)
     }
 
+    fun loadExistingPreKey(): PreKeyRecord? = dao.getAnyPreKey()?.let { PreKeyRecord(it.recordData) }
+
     // -- SignedPreKeyStore --
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord {
@@ -116,6 +124,10 @@ class SignalStoreAdapter @Inject constructor(
 
     override fun removeSignedPreKey(signedPreKeyId: Int) {
         dao.removeSignedPreKey(signedPreKeyId)
+    }
+
+    fun loadExistingSignedPreKey(): SignedPreKeyRecord? = dao.getAllSignedPreKeys().firstOrNull()?.let {
+        SignedPreKeyRecord(it.recordData)
     }
 
     // -- SessionStore --

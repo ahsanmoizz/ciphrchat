@@ -15,27 +15,31 @@ import javax.inject.Singleton
 class SignalSessionManager @Inject constructor(
     private val store: SignalStoreAdapter
 ) {
+    @Synchronized
     fun generatePreKeyBundle(): PreKeyBundle {
         val identityKeyPair = store.identityKeyPair
         val registrationId = store.localRegistrationId
-        
-        val preKeys = KeyHelper.generatePreKeys(0, 100)
-        val signedPreKey = KeyHelper.generateSignedPreKey(identityKeyPair, 0)
-        
-        preKeys.forEach { store.storePreKey(it.id, it) }
-        store.storeSignedPreKey(signedPreKey.id, signedPreKey)
+
+        val preKey = store.loadExistingPreKey() ?: KeyHelper.generatePreKeys(0, 100).first().also {
+            store.storePreKey(it.id, it)
+        }
+        val signedPreKey = store.loadExistingSignedPreKey() ?: KeyHelper.generateSignedPreKey(identityKeyPair, 0).also {
+            store.storeSignedPreKey(it.id, it)
+        }
         
         return PreKeyBundle(
             registrationId,
             1,
-            preKeys[0].id,
-            preKeys[0].keyPair.publicKey,
+            preKey.id,
+            preKey.keyPair.publicKey,
             signedPreKey.id,
             signedPreKey.keyPair.publicKey,
             signedPreKey.signature,
             identityKeyPair.publicKey
         )
     }
+
+    fun hasSession(address: SignalProtocolAddress): Boolean = store.containsSession(address)
 
     fun processPreKeyBundle(address: SignalProtocolAddress, bundle: PreKeyBundle) {
         val builder = SessionBuilder(store, address)

@@ -19,6 +19,9 @@ interface SignalCryptoDao {
     @Query("SELECT * FROM signal_prekeys WHERE preKeyId = :preKeyId")
     fun getPreKey(preKeyId: Int): SignalPreKeyEntity?
 
+    @Query("SELECT * FROM signal_prekeys ORDER BY preKeyId LIMIT 1")
+    fun getAnyPreKey(): SignalPreKeyEntity?
+
     @Query("SELECT COUNT(*) FROM signal_prekeys WHERE preKeyId = :preKeyId")
     fun containsPreKey(preKeyId: Int): Int
 
