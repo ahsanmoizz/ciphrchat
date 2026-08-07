@@ -1,0 +1,8 @@
+target
+.git
+.github
+apps
+crates
+docs
+*.zip
+*.apk
