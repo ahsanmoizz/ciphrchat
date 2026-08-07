@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import org.ciphrchat.app.transport.TransportWireCodec
+import org.ciphrchat.app.identity.ContactRepository
 
 @Singleton
 @SuppressLint("MissingPermission")
@@ -26,7 +27,8 @@ class BluetoothTransportAdapter @Inject constructor(
     private val context: Context,
     private val bleAdvertiser: BleAdvertiser,
     private val bleScanner: BleScanner,
-    private val gattServerManager: GattServerManager
+    private val gattServerManager: GattServerManager,
+    private val contacts: ContactRepository
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.BLUETOOTH_DIRECT
     override val capabilities: Set<TransportCapability> = setOf(
@@ -89,12 +91,14 @@ class BluetoothTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return if (bleScanner.deviceAddressFor(recipientId) != null) Reachability.Reachable
+        return if (bleScanner.deviceAddressFor(discoveryTokenFor(recipientId)) != null) Reachability.Reachable
         else Reachability.Unreachable("Peer not discovered over Bluetooth")
     }
 
-    override suspend fun send(envelope: OutboundEnvelope): SendResult = suspendCoroutine { cont ->
-        val deviceMac = bleScanner.deviceAddressFor(envelope.recipientId)
+    override suspend fun send(envelope: OutboundEnvelope): SendResult {
+        val discoveryToken = discoveryTokenFor(envelope.recipientId)
+        return suspendCoroutine { cont ->
+        val deviceMac = bleScanner.deviceAddressFor(discoveryToken)
             ?: return@suspendCoroutine cont.resume(SendResult.Rejected("Peer not discovered over Bluetooth"))
         val device = adapter?.getRemoteDevice(deviceMac)
         
@@ -191,6 +195,7 @@ class BluetoothTransportAdapter @Inject constructor(
         }
 
         gatt = device.connectGatt(context, false, gattCallback)
+        }
     }
 
     private fun hasBluetoothPermissions(): Boolean {
@@ -200,5 +205,11 @@ class BluetoothTransportAdapter @Inject constructor(
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_ADVERTISE
         ).all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+    }
+
+    private suspend fun discoveryTokenFor(recipientId: String): String {
+        val contact = contacts.find(recipientId)
+        return contact?.discoveryToken?.ifBlank { ContactDiscoveryToken.forContactId(recipientId) }
+            ?: ContactDiscoveryToken.forContactId(recipientId)
     }
 }

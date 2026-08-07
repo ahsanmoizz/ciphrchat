@@ -67,11 +67,11 @@ class BleScanner @Inject constructor(
         val record = result.scanRecord ?: return
         val serviceData = record.serviceData[BleAdvertiser.OMNICHAT_SERVICE_UUID] ?: return
         
-        val truncatedId = String(serviceData, Charsets.UTF_8)
+        val discoveryToken = String(serviceData, Charsets.US_ASCII)
         val macAddress = result.device.address
 
         val peer = DiscoveredPeer(
-            id = truncatedId, // Real app would look up full ID or resolve identity, here we use truncated ID as proxy
+            id = discoveryToken,
             displayName = "BLE Peer",
             transportKind = TransportKind.BLUETOOTH_DIRECT,
             reachabilityScore = 70 + (result.rssi + 100), // Simple heuristic for RSSI mapping

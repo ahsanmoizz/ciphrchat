@@ -52,8 +52,7 @@ class BleAdvertiser @Inject constructor(
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        // Extract a truncated version (e.g. first 8 bytes) of the public ID to fit in BLE limits
-        val idBytes = identity.publicId.toByteArray(Charsets.UTF_8).take(16).toByteArray()
+        val idBytes = ContactDiscoveryToken.forContactId(identity.publicId).toByteArray(Charsets.US_ASCII)
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)

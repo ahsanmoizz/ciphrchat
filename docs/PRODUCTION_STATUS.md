@@ -4,7 +4,7 @@ This is the release truth for the repository. Green CI proves that checked-in co
 
 ## Verified in the repository
 
-- Android debug build, lint, Rust tests/clippy/formatting, relay checks, and relay container build run in GitHub Actions.
+- Android debug build, lint, Android unit tests, Rust tests/clippy/formatting, relay checks, and relay container build run in GitHub Actions.
 - Local identity, Signal pre-key/session records, contacts, encrypted message previews, encrypted Signal payloads, and queued outbox payloads persist in SQLCipher-backed Room storage.
 - Recovery export/import is a password-protected AES-GCM snapshot containing identity, Signal state, contacts, messages, and sessions.
 - Internet messaging code uses the Rust/libp2p request-response client and a persistent-key circuit relay service; a live relay and two-device delivery are not yet verified.

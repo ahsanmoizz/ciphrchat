@@ -21,6 +21,7 @@ data class ContactEntity(
     val signedPreKey: ByteArray,
     val signedPreKeySignature: ByteArray,
     val identityKey: ByteArray,
+    val discoveryToken: String = "",
     val verified: Boolean,
     val createdAtEpochMs: Long
 )

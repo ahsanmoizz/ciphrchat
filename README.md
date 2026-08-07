@@ -39,7 +39,7 @@ On the first launch:
 
 For Internet messaging, first deploy the required relay and set the repository variable `CIPHRCHAT_RELAY_ADDRESS` to its multiaddress; follow the [deployment runbook](docs/DEPLOYMENT.md). Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
 
-The current implemented routes are Internet/libp2p relay, LAN, Wi-Fi Direct, and Bluetooth GATT; the live Internet relay and hardware interoperability still require the release test matrix. IR, NFC, UWB, ultrasound, Wi-Fi Aware messaging, and Bluetooth mesh forwarding remain visibly experimental or unavailable until their authenticated inbound protocols and hardware test matrix are complete. See [production status](docs/PRODUCTION_STATUS.md) for the release gates.
+The current implemented routes are Internet/libp2p relay, LAN, Wi-Fi Direct, and Bluetooth GATT; the live Internet relay and hardware interoperability still require the release test matrix. IR, NFC, UWB, ultrasound, Wi-Fi Aware messaging, and Bluetooth mesh forwarding remain visibly experimental or unavailable until their authenticated inbound protocols and hardware test matrix are complete. See [production status](docs/PRODUCTION_STATUS.md) and the [production verification audit](docs/PRODUCTION_VERIFICATION.md) for the release gates.
 
 ## Build from source
 

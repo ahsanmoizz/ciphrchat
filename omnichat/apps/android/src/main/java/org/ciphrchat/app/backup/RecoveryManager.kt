@@ -14,6 +14,7 @@ import org.ciphrchat.app.data.SignalSessionEntity
 import org.ciphrchat.app.data.SignalSignedPreKeyEntity
 import org.ciphrchat.app.messaging.MessageDirection
 import org.ciphrchat.app.messaging.MessageStatus
+import org.ciphrchat.app.transport.bluetooth.ContactDiscoveryToken
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.ByteArrayOutputStream
@@ -179,12 +180,15 @@ private fun ContactEntity.toJson() = JSONObject()
     .put("relayAddress", relayAddress).put("registrationId", registrationId).put("deviceId", deviceId)
     .put("preKeyId", preKeyId).put("preKey", preKey.encode()).put("signedPreKeyId", signedPreKeyId)
     .put("signedPreKey", signedPreKey.encode()).put("signedPreKeySignature", signedPreKeySignature.encode())
-    .put("identityKey", identityKey.encode()).put("verified", verified).put("createdAtEpochMs", createdAtEpochMs)
+    .put("identityKey", identityKey.encode()).put("discoveryToken", discoveryToken)
+    .put("verified", verified).put("createdAtEpochMs", createdAtEpochMs)
 private fun JSONObject.toContact() = ContactEntity(
     getString("contactId"), getString("displayName"), getString("peerId"), getString("relayAddress"),
     getInt("registrationId"), getInt("deviceId"), getInt("preKeyId"), getString("preKey").decodeBytes(),
     getInt("signedPreKeyId"), getString("signedPreKey").decodeBytes(), getString("signedPreKeySignature").decodeBytes(),
-    getString("identityKey").decodeBytes(), getBoolean("verified"), getLong("createdAtEpochMs")
+    getString("identityKey").decodeBytes(),
+    optString("discoveryToken").ifBlank { ContactDiscoveryToken.forContactId(getString("contactId")) },
+    getBoolean("verified"), getLong("createdAtEpochMs")
 )
 
 private fun MessageEntity.toJson() = JSONObject()

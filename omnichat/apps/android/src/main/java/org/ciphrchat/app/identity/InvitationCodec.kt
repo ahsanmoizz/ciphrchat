@@ -4,6 +4,7 @@ import android.util.Base64
 import org.ciphrchat.app.data.ContactEntity
 import org.json.JSONObject
 import org.whispersystems.libsignal.state.PreKeyBundle
+import org.ciphrchat.app.transport.bluetooth.ContactDiscoveryToken
 import java.security.MessageDigest
 
 /** Versioned, self-contained invitation exchanged out of band (QR, NFC, or text). */
@@ -67,6 +68,7 @@ object InvitationCodec {
             signedPreKey = decodeB64(json.getString("signedPreKey")),
             signedPreKeySignature = decodeB64(json.getString("signedPreKeySignature")),
             identityKey = identityKey,
+            discoveryToken = ContactDiscoveryToken.forContactId(contactId),
             verified = false,
             createdAtEpochMs = System.currentTimeMillis()
         )
