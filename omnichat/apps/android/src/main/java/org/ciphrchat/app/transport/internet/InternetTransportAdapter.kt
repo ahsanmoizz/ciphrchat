@@ -33,6 +33,7 @@ class InternetTransportAdapter @Inject constructor(
     private var started = false
 
     override suspend fun start(): Result<Unit> {
+        if (started) return Result.success(Unit)
         if (BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isBlank()) {
             val error = IllegalStateException("No public relay is configured for this build")
             _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.UNAVAILABLE, error.message!!)
@@ -60,7 +61,14 @@ class InternetTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        if (!started) return Reachability.Unreachable("Internet relay client is not running")
+        if (!started) {
+            val startResult = start()
+            if (startResult.isFailure) {
+                return Reachability.Unreachable(
+                    "Internet relay client could not start: ${startResult.exceptionOrNull()?.message}"
+                )
+            }
+        }
         return if (contacts.find(recipientId) != null) Reachability.Reachable
         else Reachability.Unreachable("Contact has no Internet invitation")
     }

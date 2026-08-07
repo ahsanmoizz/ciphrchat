@@ -39,7 +39,7 @@ class PeerKeyStore @Inject constructor(
                 }
             }
             val result = action(temporary.absolutePath)
-            if (result && temporary.isFile) {
+            if (temporary.isFile) {
                 val generatedOrExisting = temporary.readBytes().also {
                     require(it.size in 1..MAX_PLAINTEXT_BYTES) { "Native peer key has an invalid size" }
                 }
