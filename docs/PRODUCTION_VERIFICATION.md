@@ -6,9 +6,9 @@ This audit records what is proven by the repository and what still requires live
 
 ## Automated evidence
 
-- Final code commit: [`7c73470`](https://github.com/ahsanmoizz/ciphrchat/commit/7c7347043e9c78772eb0ec398a1cd1af37cf87ba)
-- Android build, lint, unit tests, APK artifact, and latest APK publication: [workflow run 31214031239](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31214031239)
-- Rust formatting, clippy, workspace tests, relay tests, and relay container build: [workflow run 31214031085](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31214031085)
+- Final code commit: [`151637a`](https://github.com/ahsanmoizz/ciphrchat/commit/151637a843b7cdefe8bab04b7c266cf544af90e9)
+- Android build, lint, unit tests, APK artifact, and latest APK publication: [workflow run 31217865760](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865760)
+- Rust formatting, clippy, workspace tests, relay tests, and relay container build: [workflow run 31217865917](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865917)
 
 ## Requirement matrix
 

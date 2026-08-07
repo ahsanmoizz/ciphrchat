@@ -12,4 +12,10 @@
 
 - Commit `7c7347043e9c78772eb0ec398a1cd1af37cf87ba` passed Android build, lint, JVM unit tests, APK artifact publication, and latest APK publication in [run 31214031239](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31214031239).
 - The same commit passed Rust formatting, clippy, workspace tests, relay tests, and relay container build in [run 31214031085](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31214031085).
-- The Android test suite now avoids parsing Android framework `JSONObject` stubs on the plain JVM; this keeps the test host-independent while production continues to use Android JSON serialization.
+- The Android test suite avoids Android framework `JSONObject` stubs on the plain JVM; the Internet wire encoder is now pure Kotlin while other Android-side JSON parsing remains on Android APIs.
+
+## CI evidence update â€” 2026-08-08
+
+- Commit `151637a843b7cdefe8bab04b7c266cf544af90e9` passed Android build, lint, JVM unit tests, APK artifact publication, and latest APK publication in [run 31217865760](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865760).
+- The same commit passed Rust formatting, clippy, workspace tests, relay tests, and relay container build in [run 31217865917](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865917).
+- `InternetWireCodec` now uses a bounded pure-Kotlin JSON encoder with explicit string escaping, so the JVM test exercises the production encoder without Android framework stubs.
