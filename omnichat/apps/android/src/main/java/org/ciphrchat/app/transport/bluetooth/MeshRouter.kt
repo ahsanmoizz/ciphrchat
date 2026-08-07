@@ -8,13 +8,13 @@ import javax.inject.Singleton
 @Singleton
 class MeshRouter @Inject constructor() {
 
-    // Simple cache of recently seen message IDs (using a bounded synchronized set for prototype)
+    // Bounded duplicate cache prevents forwarding loops when mesh routing is enabled.
     private val MAX_CACHE_SIZE = 1000
     private val seenMessageIds = Collections.synchronizedSet(LinkedHashSet<String>())
 
     fun shouldForward(envelope: OutboundEnvelope, currentIdentityId: String): Boolean {
         // Don't forward if it's meant for us
-        if (String(envelope.recipientTag) == currentIdentityId) {
+        if (envelope.recipientId == currentIdentityId) {
             return false
         }
 

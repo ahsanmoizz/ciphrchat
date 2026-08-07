@@ -20,7 +20,7 @@ class InfraredTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.EXPERIMENTAL, "Infrared PoC Ready")
+        TransportState(kind, TransportAvailability.EXPERIMENTAL, "IR hardware can transmit only; no authenticated receiver is available")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -28,16 +28,16 @@ class InfraredTransportAdapter @Inject constructor(
 
     override suspend fun start(): Result<Unit> {
         if (irManager == null || !irManager.hasIrEmitter()) {
-            _state.value = TransportState(TransportAvailability.UNAVAILABLE, "No IR hardware detected")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "No IR hardware detected")
             return Result.failure(Exception("IR not supported"))
         }
         
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "IR Emitter Ready")
+        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "IR hardware detected; CiphrChat IR messaging is unavailable")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -47,29 +47,10 @@ class InfraredTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.UNREACHABLE
+        return Reachability.Unreachable("IR messaging is unavailable")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        if (irManager == null || !irManager.hasIrEmitter()) {
-            return SendResult.Failure(Exception("IR hardware not available"))
-        }
-
-        val frequency = 38000 // Standard 38kHz
-        
-        // Very basic mock translation of bytes to IR pulses for the scaffold
-        val pattern = mutableListOf<Int>()
-        for (byte in envelope.encryptedPayload) {
-            pattern.add(1000) // mark
-            pattern.add(if (byte > 0) 1000 else 500) // space
-        }
-        
-        try {
-            irManager.transmit(frequency, pattern.toIntArray())
-        } catch (e: Exception) {
-            return SendResult.Failure(e)
-        }
-        
-        return SendResult.Success
+        return SendResult.Rejected("IR messaging requires an authenticated bidirectional receiver")
     }
 }

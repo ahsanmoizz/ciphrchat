@@ -13,13 +13,15 @@ import org.ciphrchat.app.messaging.MessageStatus
 import org.ciphrchat.app.transport.AutomaticRouter
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
+import org.ciphrchat.app.identity.IdentityRepository
 
 @HiltWorker
 class PendingMessageRetryWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val database: AppDatabase,
-    private val router: AutomaticRouter
+    private val router: AutomaticRouter,
+    private val identity: IdentityRepository
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -36,6 +38,7 @@ class PendingMessageRetryWorker @AssistedInject constructor(
                 protocolVersion = 1,
                 messageId = message.id,
                 recipientId = message.recipientId,
+                senderId = identity.current()?.publicId ?: "",
                 createdAtEpochMs = message.createdAtEpochMs,
                 expiresAtEpochMs = message.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
                 hopLimit = 3,

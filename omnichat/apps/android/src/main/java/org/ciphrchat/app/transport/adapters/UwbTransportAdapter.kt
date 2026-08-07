@@ -21,23 +21,22 @@ class UwbTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.EXPERIMENTAL, "UWB PoC Ready")
+        TransportState(kind, TransportAvailability.EXPERIMENTAL, "UWB ranging is not a message transport")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
-        // Requires SDK 31 for core UWB manager, but we mock for PoC
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            _state.value = TransportState(TransportAvailability.UNAVAILABLE, "UWB requires Android 12+")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB requires Android 12+")
             return Result.failure(Exception("UWB not supported on OS version"))
         }
         
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "UWB ranging ready")
+        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "UWB ranging is available only as an assist; payload transport is unavailable")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -47,7 +46,7 @@ class UwbTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.UNREACHABLE
+        return Reachability.Unreachable("UWB is not a message transport")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

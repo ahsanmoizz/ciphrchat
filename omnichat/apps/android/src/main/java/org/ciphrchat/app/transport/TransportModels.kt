@@ -103,6 +103,7 @@ data class OutboundEnvelope(
     val protocolVersion: Int,
     val messageId: String,
     val recipientId: String,
+    val senderId: String = "",
     val createdAtEpochMs: Long,
     val expiresAtEpochMs: Long,
     val hopLimit: Int,

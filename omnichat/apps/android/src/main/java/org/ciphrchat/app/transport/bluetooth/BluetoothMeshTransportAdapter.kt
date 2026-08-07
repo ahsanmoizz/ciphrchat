@@ -31,7 +31,7 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.EXPERIMENTAL, "Mesh Routing Ready")
+        TransportState(kind, TransportAvailability.EXPERIMENTAL, "Mesh forwarding requires authenticated neighbor routing")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -42,18 +42,16 @@ class BluetoothMeshTransportAdapter @Inject constructor(
         checkBatteryState()
         
         if (isBatteryLow) {
-            _state.value = TransportState(TransportAvailability.UNAVAILABLE, "Battery too low for mesh routing")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "Battery too low for mesh routing")
             return Result.failure(Exception("Low Battery"))
         }
 
-        // In a real implementation, we'd start our own background listeners or hook into GattServerManager.
-        // For the prototype phase, we verify that the adapter can be started if the battery allows.
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Mesh Routing Active")
+        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "Bluetooth direct messaging is available; mesh forwarding is disabled")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -63,29 +61,11 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        // Mesh can attempt to reach anyone not directly reachable
-        val directReach = bluetoothTransportAdapter.canReach(recipientId)
-        return if (directReach == Reachability.DIRECT) Reachability.DIRECT else Reachability.MESH_PATH
+        return Reachability.Unreachable("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        checkBatteryState()
-        if (isBatteryLow) {
-            return SendResult.Failure(Exception("Battery too low to forward"))
-        }
-
-        val myId = identityRepository.current()?.publicId ?: return SendResult.Failure(Exception("No identity"))
-
-        if (!meshRouter.shouldForward(envelope, myId)) {
-            return SendResult.Failure(Exception("Envelope dropped by mesh router"))
-        }
-
-        val forwardedEnvelope = meshRouter.prepareForForwarding(envelope)
-        
-        // Use direct adapter to broadcast to neighbors
-        // For prototype, we'd loop over discovered peers and send to all (flooding)
-        // Here we just call send which defaults to first peer or specific peer
-        return bluetoothTransportAdapter.send(forwardedEnvelope)
+        SendResult.Rejected("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
     }
 
     private fun checkBatteryState() {

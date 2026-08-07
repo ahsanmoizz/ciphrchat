@@ -22,7 +22,7 @@ class NfcTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.EXPERIMENTAL, "NFC PoC Ready")
+        TransportState(kind, TransportAvailability.EXPERIMENTAL, "NFC is reserved for explicit pairing")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -31,22 +31,22 @@ class NfcTransportAdapter @Inject constructor(
 
     override suspend fun start(): Result<Unit> {
         if (nfcAdapter == null) {
-            _state.value = TransportState(TransportAvailability.UNAVAILABLE, "NFC not supported")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "NFC not supported")
             return Result.failure(Exception("NFC not available"))
         }
 
         if (!nfcAdapter.isEnabled) {
-            _state.value = TransportState(TransportAvailability.UNAVAILABLE, "NFC disabled")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "NFC disabled")
             return Result.failure(Exception("NFC disabled"))
         }
 
         // In full implementation, we'd enable Reader Mode or Host Card Emulation
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "NFC Ready")
+        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "NFC detected; explicit pairing flow is not a message route")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -56,7 +56,7 @@ class NfcTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.UNREACHABLE
+        return Reachability.Unreachable("NFC is reserved for explicit pairing")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

@@ -20,6 +20,8 @@ import org.ciphrchat.app.transport.internet.RustP2pManager
 import org.ciphrchat.app.transport.AutomaticRouter
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
+import org.ciphrchat.app.transport.TransportInboundBus
+import org.ciphrchat.app.identity.IdentityRepository
 import org.whispersystems.libsignal.SignalProtocolAddress
 import java.util.UUID
 import javax.inject.Inject
@@ -32,7 +34,9 @@ class PersistentMessageRepository @Inject constructor(
     private val contacts: ContactRepository,
     private val sessions: SignalSessionManager,
     private val contentCipher: MessageContentCipher,
-    private val p2p: RustP2pManager
+    private val p2p: RustP2pManager,
+    private val inboundBus: TransportInboundBus,
+    private val identity: IdentityRepository
 ) : MessageRepository {
 
     private val dao = database.messageDao()
@@ -45,6 +49,9 @@ class PersistentMessageRepository @Inject constructor(
                     receive(event.peerId, event.payload)
                 }
             }
+        }
+        networkScope.launch {
+            inboundBus.events.collect { event -> receiveLocal(event.envelope) }
         }
     }
 
@@ -98,6 +105,7 @@ class PersistentMessageRepository @Inject constructor(
             protocolVersion = 1,
             messageId = entity.id,
             recipientId = recipientId,
+            senderId = identity.current()?.publicId ?: error("Local identity is unavailable"),
             createdAtEpochMs = entity.createdAtEpochMs,
             expiresAtEpochMs = entity.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
             hopLimit = 3,
@@ -153,6 +161,29 @@ class PersistentMessageRepository @Inject constructor(
                     direction = MessageDirection.INCOMING,
                     status = MessageStatus.DELIVERED,
                     selectedTransport = "INTERNET_DIRECT"
+                )
+            )
+        }
+    }
+
+    private suspend fun receiveLocal(envelope: OutboundEnvelope) {
+        if (envelope.testOnly || envelope.expiresAtEpochMs < System.currentTimeMillis()) return
+        val contact = contacts.find(envelope.senderId) ?: return
+        runCatching {
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            val plaintext = sessions.decryptSerializedMessage(address, envelope.encryptedPayload)
+            dao.insertMessage(
+                MessageEntity(
+                    id = envelope.messageId,
+                    conversationId = contact.contactId,
+                    senderId = contact.contactId,
+                    recipientId = identity.current()?.publicId ?: "local",
+                    body = contentCipher.encrypt(plaintext.toString(Charsets.UTF_8)),
+                    encryptedPayload = envelope.encryptedPayload,
+                    createdAtEpochMs = envelope.createdAtEpochMs,
+                    direction = MessageDirection.INCOMING,
+                    status = MessageStatus.DELIVERED,
+                    selectedTransport = "LOCAL"
                 )
             )
         }

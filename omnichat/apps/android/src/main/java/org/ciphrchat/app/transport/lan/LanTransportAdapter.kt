@@ -20,23 +20,23 @@ class LanTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.AVAILABLE, "Wi-Fi Connected; NSD Ready")
+        TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Connected; NSD Ready")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
         return runCatching {
-            val port = 12345 // Fixed port for this prototype phase
+            val port = LAN_PORT
             lanConnection.startServer(port)
             lanDiscovery.start(port).getOrThrow()
-            _state.value = TransportState(TransportAvailability.AVAILABLE, "Listening on port $port")
+            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Listening on port $port")
         }
     }
 
     override suspend fun stop(): Result<Unit> {
         lanDiscovery.stop()
         lanConnection.stopServer()
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -46,17 +46,20 @@ class LanTransportAdapter @Inject constructor(
 
     override suspend fun canReach(recipientId: String): Reachability {
         val serviceInfo = lanDiscovery.getResolvedService(recipientId)
-        return if (serviceInfo != null) Reachability.DIRECT else Reachability.UNREACHABLE
+        return if (serviceInfo != null) Reachability.Reachable else Reachability.Unreachable("Peer not discovered on LAN")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        val serviceInfo = lanDiscovery.getResolvedService(String(envelope.recipientTag))
-            ?: return SendResult.Failure(Exception("Peer not found on LAN"))
-            
-        val host = serviceInfo.host?.hostAddress ?: return SendResult.Failure(Exception("Host address missing"))
+        val serviceInfo = lanDiscovery.getResolvedService(envelope.recipientId)
+            ?: return SendResult.Rejected("Peer not found on LAN")
+
+        val host = serviceInfo.host?.hostAddress ?: return SendResult.Failed(Exception("Host address missing"))
         val port = serviceInfo.port
-        
+
         val result = lanConnection.sendEnvelope(host, port, envelope)
-        return if (result.isSuccess) SendResult.Success else SendResult.Failure(result.exceptionOrNull() ?: Exception("Send failed"))
+        return if (result.isSuccess) SendResult.Accepted(kind, "lan-frame")
+        else SendResult.Failed(result.exceptionOrNull() ?: Exception("Send failed"))
     }
+
+    private companion object { const val LAN_PORT = 40123 }
 }

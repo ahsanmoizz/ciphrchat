@@ -10,11 +10,17 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
+import java.io.DataInputStream
+import org.ciphrchat.app.transport.TransportInboundBus
+import org.ciphrchat.app.transport.TransportKind
+import org.ciphrchat.app.transport.TransportWireCodec
 
 @Singleton
 @SuppressLint("MissingPermission") // Suppressed for prototype phase
 class GattServerManager @Inject constructor(
-    private val context: Context
+    private val context: Context,
+    private val inboundBus: TransportInboundBus
 ) {
     companion object {
         val GATT_SERVICE_UUID: UUID = UUID.fromString("0000FF02-0000-1000-8000-00805F9B34FB")
@@ -122,7 +128,12 @@ class GattServerManager @Inject constructor(
         
         if (buffer.size() >= expected) {
             val fullPayload = buffer.toByteArray()
-            _incomingData.tryEmit(fullPayload.copyOf(expected))
+            val frame = fullPayload.copyOf(expected)
+            _incomingData.tryEmit(frame)
+            runCatching {
+                val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(frame)))
+                inboundBus.publish(TransportKind.BLUETOOTH_DIRECT, envelope)
+            }
             assemblyBuffers.remove(deviceAddress)
             expectedLengths.remove(deviceAddress)
         }

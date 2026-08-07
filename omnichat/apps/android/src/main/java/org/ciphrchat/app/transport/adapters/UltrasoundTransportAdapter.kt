@@ -20,19 +20,19 @@ class UltrasoundTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.EXPERIMENTAL, "Ultrasound PoC Ready")
+        TransportState(kind, TransportAvailability.EXPERIMENTAL, "Ultrasound demodulation is not production-ready")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
         modem.startListening()
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Listening for ultrasound pings")
+        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "Ultrasound capture is experimental and not an authenticated message route")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
         modem.stopListening()
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -42,15 +42,10 @@ class UltrasoundTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.UNREACHABLE
+        return Reachability.Unreachable("Ultrasound messaging is unavailable")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        if (envelope.encryptedPayload.size > 20) {
-            return SendResult.Failure(Exception("Payload too large for ultrasound transmission"))
-        }
-        
-        modem.transmit(envelope.encryptedPayload)
-        return SendResult.Success
+        return SendResult.Rejected("Ultrasound messaging is experimental and disabled for automatic routing")
     }
 }

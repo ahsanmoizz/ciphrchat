@@ -12,6 +12,9 @@ import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.delay
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import org.ciphrchat.app.transport.TransportWireCodec
 
 @Singleton
 @SuppressLint("MissingPermission")
@@ -29,7 +32,7 @@ class BluetoothTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.AVAILABLE, "Bluetooth Ready")
+        TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Ready")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -42,7 +45,7 @@ class BluetoothTransportAdapter @Inject constructor(
         gattServerManager.start()
         
         if (adStarted || scanStarted) {
-            _state.value = TransportState(TransportAvailability.AVAILABLE, "Bluetooth Active")
+            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
             return Result.success(Unit)
         }
         return Result.failure(Exception("Bluetooth start failed"))
@@ -52,7 +55,7 @@ class BluetoothTransportAdapter @Inject constructor(
         bleAdvertiser.stop()
         bleScanner.stop()
         gattServerManager.stop()
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -61,14 +64,13 @@ class BluetoothTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        val peer = bleScanner.discoveredPeers.value.find { it.id == recipientId }
-        return if (peer != null) Reachability.DIRECT else Reachability.UNREACHABLE
+        return if (bleScanner.deviceAddressFor(recipientId) != null) Reachability.Reachable
+        else Reachability.Unreachable("Peer not discovered over Bluetooth")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult = suspendCoroutine { cont ->
-        // For the prototype, we assume envelope.recipientTag contains the MAC address directly
-        // because we haven't implemented a full MAC-to-Identity resolution table.
-        val deviceMac = String(envelope.recipientTag)
+        val deviceMac = bleScanner.deviceAddressFor(envelope.recipientId)
+            ?: return@suspendCoroutine cont.resume(SendResult.Rejected("Peer not discovered over Bluetooth"))
         val device = adapter?.getRemoteDevice(deviceMac)
         
         if (device == null) {
@@ -77,7 +79,10 @@ class BluetoothTransportAdapter @Inject constructor(
         }
 
         var gatt: BluetoothGatt? = null
-        val payload = envelope.encryptedPayload
+        val payload = ByteArrayOutputStream().use { buffer ->
+            DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
+            buffer.toByteArray()
+        }
         val mtu = 512 // Request highest MTU, assume 512 for now
         var offset = 0
         
@@ -108,7 +113,7 @@ class BluetoothTransportAdapter @Inject constructor(
             override fun onCharacteristicWrite(g: BluetoothGatt, char: BluetoothGattCharacteristic, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     if (offset >= payload.size) {
-                        cont.resume(SendResult.Success)
+                        cont.resume(SendResult.Accepted(kind, "ble-gatt-frame"))
                         g.disconnect()
                     } else {
                         writeNextChunk(g)

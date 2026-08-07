@@ -24,7 +24,7 @@ class WifiDirectTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(TransportAvailability.AVAILABLE, "Wi-Fi Direct Ready")
+        TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Direct Ready")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -32,15 +32,15 @@ class WifiDirectTransportAdapter @Inject constructor(
         return runCatching {
             wifiDirectManager.start()
             // We use the same generic socket server from LanConnection as Wi-Fi Direct provides a standard IP network.
-            lanConnection.startServer(12346) 
-            _state.value = TransportState(TransportAvailability.AVAILABLE, "Wi-Fi Direct Started")
+            lanConnection.startServer(DIRECT_PORT, kind)
+            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Direct Started")
         }
     }
 
     override suspend fun stop(): Result<Unit> {
         wifiDirectManager.stop()
-        lanConnection.stopServer()
-        _state.value = TransportState(TransportAvailability.AVAILABLE, "Stopped")
+        lanConnection.stopServer(DIRECT_PORT)
+        _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
@@ -51,11 +51,11 @@ class WifiDirectTransportAdapter @Inject constructor(
     override suspend fun canReach(recipientId: String): Reachability {
         // Recipient ID maps to P2P MAC address in this prototype phase
         val peer = wifiDirectManager.discoveredPeers.value.find { it.id == recipientId }
-        return if (peer != null) Reachability.DIRECT else Reachability.UNREACHABLE
+        return if (peer != null) Reachability.Reachable else Reachability.Unreachable("Peer not discovered")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        val targetMac = String(envelope.recipientTag)
+        val targetMac = envelope.recipientId
         
         // 1. Connect P2P group
         val connected = suspendCoroutine { cont ->
@@ -63,15 +63,18 @@ class WifiDirectTransportAdapter @Inject constructor(
                 cont.resume(success)
             }
         }
-        if (!connected) return SendResult.Failure(Exception("Failed to form Wi-Fi Direct group"))
+        if (!connected) return SendResult.Failed(Exception("Failed to form Wi-Fi Direct group"))
 
         // Wait a brief moment for group owner IP to be resolved (omitted robust retry loop for prototype)
         val info = wifiDirectManager.connectionInfo.value
         val goAddress = info?.groupOwnerAddress?.hostAddress 
-            ?: return SendResult.Failure(Exception("Group owner IP not available"))
+            ?: return SendResult.Failed(Exception("Group owner IP not available"))
 
         // 2. Send payload over sockets
-        val result = lanConnection.sendEnvelope(goAddress, 12346, envelope)
-        return if (result.isSuccess) SendResult.Success else SendResult.Failure(result.exceptionOrNull() ?: Exception("Socket send failed"))
+        val result = lanConnection.sendEnvelope(goAddress, DIRECT_PORT, envelope)
+        return if (result.isSuccess) SendResult.Accepted(kind, "wifi-direct-frame")
+        else SendResult.Failed(result.exceptionOrNull() ?: Exception("Socket send failed"))
     }
+
+    private companion object { const val DIRECT_PORT = 40124 }
 }

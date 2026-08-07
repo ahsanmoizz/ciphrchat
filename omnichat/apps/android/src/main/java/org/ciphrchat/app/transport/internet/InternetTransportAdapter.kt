@@ -90,6 +90,7 @@ class InternetTransportAdapter @Inject constructor(
     private fun OutboundEnvelope.toWirePayload(): ByteArray = JSONObject()
         .put("protocolVersion", protocolVersion)
         .put("messageId", messageId)
+        .put("senderId", senderId)
         .put("createdAtEpochMs", createdAtEpochMs)
         .put("expiresAtEpochMs", expiresAtEpochMs)
         .put("hopLimit", hopLimit)

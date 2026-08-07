@@ -31,7 +31,7 @@ class AutomaticRouter @Inject constructor(
                         is SendResult.Rejected -> failures += "${adapter.kind}: ${result.reason}"
                         is SendResult.Failed -> failures += "${adapter.kind}: ${result.error.message}"
                         is SendResult.Failure -> failures += "${adapter.kind}: ${result.error.message}"
-                        SendResult.Success -> return SendResult.Accepted(adapter.kind, "prototype")
+                        SendResult.Success -> failures += "${adapter.kind}: adapter returned an unverified success"
                     }
                 }
                 Reachability.Unknown -> failures += "${adapter.kind}: reachability unknown"
