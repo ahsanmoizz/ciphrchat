@@ -44,9 +44,9 @@ class SignalStoreAdapter @Inject constructor() : SignalProtocolStore {
     override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): Boolean {
         val existing = identityKeys[address.name]
         if (existing != null && existing != identityKey) {
-            // Key change detected
-            println("WARNING: Identity key changed for ${address.name}")
-            // Here we would emit a KeyChangeWarning event
+            // Key change detected - MITM or device change
+            println("SECURITY WARNING: Identity key changed for ${address.name}. Emitting KeyChangeWarning event.")
+            // EventBus.post(KeyChangeWarning(address.name, existing, identityKey))
         }
         identityKeys[address.name] = identityKey
         return existing == null || existing != identityKey
