@@ -1,7 +1,7 @@
 # STATE.md — Project Memory
 
 > **Last Updated**: 2026-08-07
-> **Current Phase**: Phase 7 — Experimental Routes
+> **Current Phase**: Phase 8 — Release Hardening
 > **Session**: Active (resumed 2026-08-07)
 
 ## Active Context
@@ -12,7 +12,8 @@
 - Phase 4 Bluetooth completed and **VERIFIED**
 - Phase 5 Internet P2P completed and **VERIFIED**
 - Phase 6 Production Encryption completed and **VERIFIED**
-- Phase 7 Planning complete. Ready for execution.
+- Phase 7 Experimental Routes completed and **VERIFIED** (Ultrasound, NFC, UWB, Infrared)
+- Ready for Phase 8: Release Hardening
 
 ## Decisions Made
 

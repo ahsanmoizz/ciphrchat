@@ -30,7 +30,7 @@
 **Objective**: Pinned libsignal adapter, session establishment, ratcheted messages, key-change detection, safety-number/QR verification, migration tests.
 
 ### Phase 7: Experimental Routes
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: Ultrasound modem PoC, Reed-Solomon correction, infrared hardware experiments, UWB-assisted confirmation, NFC pairing.
 
 ### Phase 8: Release Hardening
