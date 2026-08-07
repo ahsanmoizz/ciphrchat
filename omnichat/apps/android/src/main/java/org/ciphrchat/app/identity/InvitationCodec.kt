@@ -51,6 +51,7 @@ object InvitationCodec {
             verified = false,
             createdAtEpochMs = System.currentTimeMillis()
         )
+    }
 
     fun toBundle(contact: ContactEntity): PreKeyBundle = PreKeyBundle(
         contact.registrationId,

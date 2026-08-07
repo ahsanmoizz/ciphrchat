@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.crypto.SignalSessionManager
+import org.ciphrchat.app.data.ContactEntity
 import org.ciphrchat.app.transport.internet.RustP2pManager
 import javax.inject.Inject
 import javax.inject.Singleton
