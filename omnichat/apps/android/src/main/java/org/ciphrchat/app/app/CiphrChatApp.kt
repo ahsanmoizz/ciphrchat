@@ -135,8 +135,10 @@ class ConnectViewModel @Inject constructor(
             }
             val peers = mutableListOf<org.ciphrchat.app.transport.DiscoveredPeer>()
             for (adapter in localAdapters) {
-                adapter.start()
-                peers += adapter.discoverPeers().getOrDefault(emptyList())
+                runCatching {
+                    adapter.start().getOrThrow()
+                    peers += adapter.discoverPeers().getOrDefault(emptyList())
+                }
             }
             nearbyStatus = if (peers.isEmpty()) {
                 "No paired nearby contacts found"

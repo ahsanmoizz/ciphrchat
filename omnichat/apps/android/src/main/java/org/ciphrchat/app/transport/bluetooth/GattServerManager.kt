@@ -17,7 +17,7 @@ import org.ciphrchat.app.transport.TransportKind
 import org.ciphrchat.app.transport.TransportWireCodec
 
 @Singleton
-@SuppressLint("MissingPermission") // Suppressed for prototype phase
+@SuppressLint("MissingPermission")
 class GattServerManager @Inject constructor(
     private val context: Context,
     private val inboundBus: TransportInboundBus
@@ -25,6 +25,7 @@ class GattServerManager @Inject constructor(
     companion object {
         val GATT_SERVICE_UUID: UUID = UUID.fromString("0000FF02-0000-1000-8000-00805F9B34FB")
         val GATT_CHARACTERISTIC_UUID: UUID = UUID.fromString("0000FF03-0000-1000-8000-00805F9B34FB")
+        const val MAX_FRAME_BYTES = 1 * 1024 * 1024
     }
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
@@ -91,9 +92,7 @@ class GattServerManager @Inject constructor(
     private fun processIncomingChunk(deviceAddress: String, chunk: ByteArray) {
         if (chunk.isEmpty()) return
         
-        // Simple protocol for prototype: 
-        // 1st byte: 0x01 (Start frame), followed by 4 bytes (Int length), then data
-        // 1st byte: 0x02 (Continuation frame), followed by data
+        // 1st byte: 0x01 (start frame) + 4-byte length, or 0x02 (continuation).
         
         val type = chunk[0]
         when (type.toInt()) {
@@ -104,6 +103,11 @@ class GattServerManager @Inject constructor(
                                  ((chunk[3].toInt() and 0xFF) shl 8) or
                                  (chunk[4].toInt() and 0xFF)
                     
+                    if (length !in 1..MAX_FRAME_BYTES) {
+                        assemblyBuffers.remove(deviceAddress)
+                        expectedLengths.remove(deviceAddress)
+                        return
+                    }
                     expectedLengths[deviceAddress] = length
                     val buffer = ByteArrayOutputStream()
                     buffer.write(chunk, 5, chunk.size - 5)
@@ -136,6 +140,10 @@ class GattServerManager @Inject constructor(
             }
             assemblyBuffers.remove(deviceAddress)
             expectedLengths.remove(deviceAddress)
+        } else if (buffer.size() > MAX_FRAME_BYTES) {
+            assemblyBuffers.remove(deviceAddress)
+            expectedLengths.remove(deviceAddress)
         }
     }
+
 }

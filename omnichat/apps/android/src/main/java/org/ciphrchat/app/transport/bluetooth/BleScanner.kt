@@ -16,7 +16,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-@SuppressLint("MissingPermission") // Suppressed for prototype phase
+@SuppressLint("MissingPermission")
 class BleScanner @Inject constructor(
     private val context: Context
 ) {

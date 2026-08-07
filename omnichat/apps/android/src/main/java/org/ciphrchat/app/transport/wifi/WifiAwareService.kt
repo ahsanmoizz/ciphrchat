@@ -23,7 +23,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 @Singleton
-@SuppressLint("MissingPermission") // Suppressed for prototype phase
+@SuppressLint("MissingPermission")
 class WifiAwareService @Inject constructor(
     private val context: Context,
     private val identityRepository: IdentityRepository
