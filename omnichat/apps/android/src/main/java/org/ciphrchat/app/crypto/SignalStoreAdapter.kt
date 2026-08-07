@@ -1,5 +1,6 @@
 package org.ciphrchat.app.crypto
 
+import org.ciphrchat.app.data.*
 import org.whispersystems.libsignal.IdentityKey
 import org.whispersystems.libsignal.IdentityKeyPair
 import org.whispersystems.libsignal.SignalProtocolAddress
@@ -11,44 +12,52 @@ import org.whispersystems.libsignal.state.SessionStore
 import org.whispersystems.libsignal.state.SignalProtocolStore
 import org.whispersystems.libsignal.state.SignedPreKeyRecord
 import org.whispersystems.libsignal.state.SignedPreKeyStore
+import org.whispersystems.libsignal.util.KeyHelper
 import javax.inject.Inject
 import javax.inject.Singleton
-import java.util.concurrent.ConcurrentHashMap
-import org.whispersystems.libsignal.util.KeyHelper
 
 @Singleton
-class SignalStoreAdapter @Inject constructor() : SignalProtocolStore {
-    
-    // In a real implementation, these maps would be backed by Room DAOs and SQLCipher.
-    // For this prototype/scaffold phase, we implement them in-memory, but they fulfill the
-    // Signal Protocol interfaces as if they were persisted.
+class SignalStoreAdapter @Inject constructor(
+    private val database: AppDatabase
+) : SignalProtocolStore {
 
-    private val identityKeyPair: IdentityKeyPair = KeyHelper.generateIdentityKeyPair()
-    private val localRegistrationId: Int = KeyHelper.generateRegistrationId(false)
-    
-    private val preKeys = ConcurrentHashMap<Int, ByteArray>()
-    private val signedPreKeys = ConcurrentHashMap<Int, ByteArray>()
-    private val sessions = ConcurrentHashMap<String, ByteArray>()
-    private val identityKeys = ConcurrentHashMap<String, IdentityKey>()
+    private val dao = database.signalCryptoDao()
+
+    init {
+        // Initialize local state if it doesn't exist
+        if (dao.getLocalState() == null) {
+            val identityKeyPair = KeyHelper.generateIdentityKeyPair()
+            val registrationId = KeyHelper.generateRegistrationId(false)
+            dao.saveLocalState(SignalLocalStateEntity(
+                id = 1,
+                identityKeyPair = identityKeyPair.serialize(),
+                registrationId = registrationId
+            ))
+        }
+    }
 
     // -- IdentityKeyStore --
 
     override fun getIdentityKeyPair(): IdentityKeyPair {
-        return identityKeyPair
+        val state = dao.getLocalState() ?: throw IllegalStateException("Local state not initialized")
+        return IdentityKeyPair(state.identityKeyPair)
     }
 
     override fun getLocalRegistrationId(): Int {
-        return localRegistrationId
+        val state = dao.getLocalState() ?: throw IllegalStateException("Local state not initialized")
+        return state.registrationId
     }
 
     override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): Boolean {
-        val existing = identityKeys[address.name]
+        val existingEntity = dao.getIdentity(address.name)
+        val existing = existingEntity?.identityKey?.let { IdentityKey(it, 0) }
+
         if (existing != null && existing != identityKey) {
             // Key change detected - MITM or device change
             println("SECURITY WARNING: Identity key changed for ${address.name}. Emitting KeyChangeWarning event.")
-            // EventBus.post(KeyChangeWarning(address.name, existing, identityKey))
         }
-        identityKeys[address.name] = identityKey
+        
+        dao.saveIdentity(SignalIdentityEntity(address.name, identityKey.serialize()))
         return existing == null || existing != identityKey
     }
 
@@ -57,61 +66,63 @@ class SignalStoreAdapter @Inject constructor() : SignalProtocolStore {
         identityKey: IdentityKey,
         direction: IdentityKeyStore.Direction
     ): Boolean {
-        val existing = identityKeys[address.name]
+        val existingEntity = dao.getIdentity(address.name)
+        val existing = existingEntity?.identityKey?.let { IdentityKey(it, 0) }
         return existing == null || existing == identityKey
     }
 
     override fun getIdentity(address: SignalProtocolAddress): IdentityKey? {
-        return identityKeys[address.name]
+        val entity = dao.getIdentity(address.name)
+        return entity?.identityKey?.let { IdentityKey(it, 0) }
     }
 
     // -- PreKeyStore --
 
     override fun loadPreKey(preKeyId: Int): PreKeyRecord {
-        val data = preKeys[preKeyId] ?: throw org.whispersystems.libsignal.InvalidKeyIdException("No such prekey: $preKeyId")
-        return PreKeyRecord(data)
+        val entity = dao.getPreKey(preKeyId) ?: throw org.whispersystems.libsignal.InvalidKeyIdException("No such prekey: $preKeyId")
+        return PreKeyRecord(entity.recordData)
     }
 
     override fun storePreKey(preKeyId: Int, record: PreKeyRecord) {
-        preKeys[preKeyId] = record.serialize()
+        dao.savePreKey(SignalPreKeyEntity(preKeyId, record.serialize()))
     }
 
     override fun containsPreKey(preKeyId: Int): Boolean {
-        return preKeys.containsKey(preKeyId)
+        return dao.containsPreKey(preKeyId) > 0
     }
 
     override fun removePreKey(preKeyId: Int) {
-        preKeys.remove(preKeyId)
+        dao.removePreKey(preKeyId)
     }
 
     // -- SignedPreKeyStore --
 
     override fun loadSignedPreKey(signedPreKeyId: Int): SignedPreKeyRecord {
-        val data = signedPreKeys[signedPreKeyId] ?: throw org.whispersystems.libsignal.InvalidKeyIdException("No such signed prekey: $signedPreKeyId")
-        return SignedPreKeyRecord(data)
+        val entity = dao.getSignedPreKey(signedPreKeyId) ?: throw org.whispersystems.libsignal.InvalidKeyIdException("No such signed prekey: $signedPreKeyId")
+        return SignedPreKeyRecord(entity.recordData)
     }
 
     override fun loadSignedPreKeys(): List<SignedPreKeyRecord> {
-        return signedPreKeys.values.map { SignedPreKeyRecord(it) }
+        return dao.getAllSignedPreKeys().map { SignedPreKeyRecord(it.recordData) }
     }
 
     override fun storeSignedPreKey(signedPreKeyId: Int, record: SignedPreKeyRecord) {
-        signedPreKeys[signedPreKeyId] = record.serialize()
+        dao.saveSignedPreKey(SignalSignedPreKeyEntity(signedPreKeyId, record.serialize()))
     }
 
     override fun containsSignedPreKey(signedPreKeyId: Int): Boolean {
-        return signedPreKeys.containsKey(signedPreKeyId)
+        return dao.containsSignedPreKey(signedPreKeyId) > 0
     }
 
     override fun removeSignedPreKey(signedPreKeyId: Int) {
-        signedPreKeys.remove(signedPreKeyId)
+        dao.removeSignedPreKey(signedPreKeyId)
     }
 
     // -- SessionStore --
 
     override fun loadSession(address: SignalProtocolAddress): SessionRecord {
-        val data = sessions[address.name]
-        return if (data != null) SessionRecord(data) else SessionRecord()
+        val entity = dao.getSession(address.name)
+        return if (entity != null) SessionRecord(entity.recordData) else SessionRecord()
     }
 
     override fun getSubDeviceSessions(name: String): List<Int> {
@@ -119,18 +130,18 @@ class SignalStoreAdapter @Inject constructor() : SignalProtocolStore {
     }
 
     override fun storeSession(address: SignalProtocolAddress, record: SessionRecord) {
-        sessions[address.name] = record.serialize()
+        dao.saveSession(SignalSessionEntity(address.name, record.serialize()))
     }
 
     override fun containsSession(address: SignalProtocolAddress): Boolean {
-        return sessions.containsKey(address.name)
+        return dao.containsSession(address.name) > 0
     }
 
     override fun deleteSession(address: SignalProtocolAddress) {
-        sessions.remove(address.name)
+        dao.deleteSession(address.name)
     }
 
     override fun deleteAllSessions(name: String) {
-        sessions.remove(name)
+        dao.deleteSession(name) // Simplification for MVP
     }
 }

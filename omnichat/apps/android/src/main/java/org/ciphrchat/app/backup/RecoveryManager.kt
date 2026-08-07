@@ -26,10 +26,10 @@ class RecoveryManager @Inject constructor(
             // Format: CIPHR_RECOVERY_V1
             val header = "CIPHR_RECOVERY_V1\n".toByteArray(Charsets.UTF_8)
             
-            // Generate symmetric key from password (in real prod, use PBKDF2 or Argon2. Using SHA-256 for phase 2 mockup)
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            val keyBytes = digest.digest(passwordForExport.toByteArray(Charsets.UTF_8))
-            val secretKey = SecretKeySpec(keyBytes, "AES")
+            val salt = ByteArray(16).apply { SecureRandom().nextBytes(this) }
+            val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            val keySpec = javax.crypto.spec.PBEKeySpec(passwordForExport.toCharArray(), salt, 100000, 256)
+            val secretKey = SecretKeySpec(factory.generateSecret(keySpec).encoded, "AES")
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             val iv = ByteArray(12).apply { SecureRandom().nextBytes(this) }
@@ -40,6 +40,7 @@ class RecoveryManager @Inject constructor(
 
             outputStream.use { out ->
                 out.write(header)
+                out.write(salt)
                 out.write(iv)
                 out.write(ciphertext)
             }
