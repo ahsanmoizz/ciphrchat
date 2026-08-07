@@ -19,6 +19,7 @@ data class MessageEntity(
     val senderId: String,
     val recipientId: String,
     val body: String,
+    val encryptedPayload: ByteArray,
     val createdAtEpochMs: Long,
     val direction: MessageDirection,
     val status: MessageStatus,

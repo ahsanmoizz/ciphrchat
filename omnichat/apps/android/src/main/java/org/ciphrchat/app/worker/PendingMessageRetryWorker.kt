@@ -39,9 +39,15 @@ class PendingMessageRetryWorker @AssistedInject constructor(
                 createdAtEpochMs = message.createdAtEpochMs,
                 expiresAtEpochMs = message.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
                 hopLimit = 3,
-                encryptedPayload = message.body.encodeToByteArray(),
-                testOnly = true
+                encryptedPayload = message.encryptedPayload,
+                testOnly = false
             )
+
+            if (message.encryptedPayload.isEmpty()) {
+                dao.updateMessage(message.copy(status = MessageStatus.FAILED))
+                allSuccess = false
+                continue
+            }
 
             val result = router.route(envelope)
             val updated = when (result) {

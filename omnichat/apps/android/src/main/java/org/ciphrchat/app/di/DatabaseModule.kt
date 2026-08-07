@@ -41,6 +41,12 @@ object DatabaseModule {
         }
     }
 
+    private val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE messages ADD COLUMN encryptedPayload BLOB NOT NULL DEFAULT X''")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideAppDatabase(
@@ -58,6 +64,7 @@ object DatabaseModule {
         )
         .openHelperFactory(factory)
         .addMigrations(MIGRATION_2_3)
+        .addMigrations(MIGRATION_3_4)
         .build()
     }
 }
