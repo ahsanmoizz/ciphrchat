@@ -22,7 +22,7 @@
 **Objective**: BLE advertisements, GATT transfer, reliable chunking and ACKs, mesh envelope forwarding, hop limit, battery-aware operation.
 
 ### Phase 5: Internet P2P
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Objective**: rust-libp2p peer identity, QUIC/TCP, bootstrap discovery, Kademlia, NAT reachability, hole punching, circuit relay, rendezvous data.
 
 ### Phase 6: Production Encryption
