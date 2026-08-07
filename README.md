@@ -2,7 +2,7 @@
 
 **One identity. Every connection.**
 
-CiphrChat is an open-source Android messaging prototype built around a local-first identity and multiple connection transports. The repository currently produces a working debug APK and includes Kotlin/Compose Android code plus Rust networking components.
+CiphrChat is an open-source Android messaging app built around a local-first identity and multiple connection transports. The repository currently produces a working debug APK and includes Kotlin/Compose Android code plus Rust networking components.
 
 > Development status: the app builds and passes CI, but it is not a production release or a completed security-audited messenger. Some restore, QR, nearby-device, and experimental transport actions are still placeholders.
 
