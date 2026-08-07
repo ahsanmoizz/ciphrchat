@@ -56,7 +56,7 @@ jobs:
           target="$VPS_USER@$VPS_HOST"
           ssh -i "$HOME/.ssh/ciphrchat_vps" -p "$VPS_PORT" \
             -o StrictHostKeyChecking=accept-new "$target" \
-            'cd /opt/ciphrchat-relay && docker compose up -d --build --remove-orphans && curl --fail --silent http://127.0.0.1:8080/health'
+            'cd /opt/ciphrchat-relay && docker compose up -d --build --remove-orphans && curl --fail --silent http://127.0.0.1:18081/health'
 
       - name: Report relay identity and address
         env:
@@ -68,7 +68,7 @@ jobs:
           target="$VPS_USER@$VPS_HOST"
           info=$(ssh -i "$HOME/.ssh/ciphrchat_vps" -p "$VPS_PORT" \
             -o StrictHostKeyChecking=accept-new "$target" \
-            'curl --fail --silent http://127.0.0.1:8080/info')
+            'curl --fail --silent http://127.0.0.1:18081/info')
           echo "$info"
           {
             echo "### Relay identity"

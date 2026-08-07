@@ -8,9 +8,9 @@ Use a Linux VPS with Docker Engine, Docker Compose, an SSH user, and firewall ru
 
 - TCP `4001` for libp2p
 - UDP `4001` for QUIC
-- TCP `8080` for local health/info checks; Compose keeps this port on loopback
+- TCP `18081` for local health/info checks; Compose maps it to the container's port `8080` and keeps it on loopback
 
-The SSH user must be able to run Docker and `sudo mkdir`/`sudo chown` as used by the deployment workflow. The workflow checks health/info over SSH, so port `8080` does not need to be publicly reachable.
+The SSH user must be able to run Docker and `sudo mkdir`/`sudo chown` as used by the deployment workflow. The workflow checks health/info over SSH, so port `18081` does not need to be publicly reachable.
 
 ## 2. Configure GitHub deployment secrets
 
