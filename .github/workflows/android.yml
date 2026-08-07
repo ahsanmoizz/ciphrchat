@@ -36,6 +36,8 @@ jobs:
 
     - name: Build Debug APK
       working-directory: ./omnichat
+      env:
+        CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
       run: ./gradlew assembleDebug -PbuildRust
 
     - name: Run Lint

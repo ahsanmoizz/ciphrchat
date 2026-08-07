@@ -2,7 +2,7 @@
 
 **One identity. Every connection.**
 
-CiphrChat is an open-source Android messaging app built around a local-first identity and multiple connection transports. The repository currently produces a working debug APK and includes Kotlin/Compose Android code plus Rust networking components.
+CiphrChat is an open-source Android messaging app built around a persistent local identity, Signal Protocol sessions, and multiple direct or relayed transports. The repository includes the Android client, Rust/libp2p networking, and the deployable relay service.
 
 
 ## Try the Android app
@@ -37,7 +37,7 @@ On the first launch:
 3. Continue through **Enable connections** and **Identity ready**.
 4. Tap **Start messaging** to open the app.
 
-The current build contains sample conversations for UI testing. The **Connect** screen shows the intended connection model, but QR restore, nearby discovery, and invitation actions are not all wired to a complete production flow yet.
+For Internet messaging, the APK must be built with the repository variable `CIPHRCHAT_RELAY_ADDRESS` set to the deployed relay multiaddress. Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
 
 ## Build from source
 
@@ -66,15 +66,26 @@ cargo check --manifest-path services/bootstrap-relay/Cargo.toml
 cargo test --workspace
 ```
 
-## Relay status
+## Relay deployment
 
-The repository contains a small Rust HTTP service at `omnichat/services/bootstrap-relay`. It currently exposes:
+The repository contains a deployable Rust/libp2p circuit-relay service at `omnichat/services/bootstrap-relay`. It exposes:
 
 ```text
 GET /health
+GET /info
 ```
 
-It is useful as a deployment foundation and health endpoint. A public, always-on production relay has not been deployed yet. See [Architecture](docs/ARCHITECTURE.md) and [Stack](docs/STACK.md) for the current boundaries.
+Run it on a VPS with Docker Compose:
+
+```bash
+cd omnichat/services/bootstrap-relay
+docker compose up -d --build
+curl http://127.0.0.1:8080/health
+```
+
+Open TCP/UDP port `4001` and TCP port `8080` in the VPS firewall. The relay identity is persisted in the `relay-data` volume, so do not delete that volume during upgrades. GitHub Actions also provides a manual **Deploy relay to VPS** workflow; configure `CIPHRCHAT_VPS_HOST`, `CIPHRCHAT_VPS_USER`, and `CIPHRCHAT_VPS_SSH_KEY` secrets (plus optional `CIPHRCHAT_VPS_PORT`) before running it.
+
+Vercel is suitable for a web landing page or short HTTP API, but it is not a suitable host for this relay: libp2p requires a continuously running process with inbound TCP and UDP listeners. Use the VPS for the relay and Vercel only for optional web assets.
 
 ## License
 
