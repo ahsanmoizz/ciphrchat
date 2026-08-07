@@ -46,10 +46,10 @@ object TransportModule {
     fun infrared(adapter: InfraredTransportAdapter): TransportAdapter = adapter
 
     @Provides @IntoSet
-    fun nfc(adapter: NfcPairingAdapter): TransportAdapter = adapter
+    fun nfc(adapter: NfcTransportAdapter): TransportAdapter = adapter
 
     @Provides @IntoSet
-    fun uwb(adapter: UwbAssistAdapter): TransportAdapter = adapter
+    fun uwb(adapter: UwbTransportAdapter): TransportAdapter = adapter
 
     @Provides @IntoSet
     fun external(adapter: ExternalTransportAdapter): TransportAdapter = adapter

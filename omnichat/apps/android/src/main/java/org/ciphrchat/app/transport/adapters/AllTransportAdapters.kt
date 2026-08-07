@@ -33,27 +33,7 @@ class InfraredTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
     )
 )
 
-@Singleton
-class NfcPairingAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.NFC_PAIRING,
-    initialAvailability = TransportAvailability.UNAVAILABLE,
-    initialDetail = "NFC pairing scaffold",
-    capabilities = setOf(
-        TransportCapability.PAIRING,
-        TransportCapability.OFFLINE
-    )
-)
 
-@Singleton
-class UwbAssistAdapter @Inject constructor() : BaseMockTransportAdapter(
-    kind = TransportKind.UWB_ASSIST,
-    initialAvailability = TransportAvailability.UNAVAILABLE,
-    initialDetail = "UWB not detected on this device",
-    capabilities = setOf(
-        TransportCapability.RANGING,
-        TransportCapability.PAIRING
-    )
-)
 
 @Singleton
 class ExternalTransportAdapter @Inject constructor() : BaseMockTransportAdapter(
