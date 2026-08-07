@@ -49,6 +49,7 @@ fun EnableConnectionsScreen(
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
             } else {
                 add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
             }
         }.toTypedArray()
     }
