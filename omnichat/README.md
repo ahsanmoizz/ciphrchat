@@ -2,11 +2,11 @@
 
 **One identity. Every connection.**
 
-CiphrChat is a minimal, open-source, local-first encrypted text messenger for Android. It gives each user one cryptographic identity and keeps each conversation continuous while automatically routing messages through Internet, shared Wi-Fi, Wi-Fi Direct, Wi-Fi Aware, Bluetooth, Bluetooth mesh, ultrasound, infrared, NFC pairing, UWB assistance, and future external adapters.
+CiphrChat is an open-source, local-first encrypted text messenger for Android. It maintains persistent local identity and conversation state, pairs contacts with signed Signal pre-key material, and routes encrypted payloads through Internet/libp2p or supported local transports.
 
 ## Status
 
-This is a development build: Android CI passes, but several restore, QR, nearby-device, and experimental transport actions are still prototype-level or placeholders. The public user guide is in the repository root at [README.md](../README.md).
+The project is under production hardening: Android and Rust/Docker CI are green, Internet relay/client code and invitation pairing are implemented, and the public user guide is in the repository root at [README.md](../README.md). A live VPS, signed release key, two-device delivery test, and independent security review are still release gates.
 
 ## Build
 

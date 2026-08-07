@@ -2,7 +2,7 @@
 
 ## Overview
 
-CiphrChat is organized as an Android client, a Rust networking workspace, and a small Rust HTTP bootstrap service.
+CiphrChat is organized as an Android client, a Rust networking workspace, and a deployable libp2p circuit-relay service.
 
 ```text
 Android app (Kotlin + Compose)
@@ -17,8 +17,8 @@ Rust workspace
         +-- ciphrchat-ffi
 
 Bootstrap relay service
-        +-- Axum HTTP server
-        +-- GET /health
+        +-- libp2p relay v2 server over TCP and QUIC
+        +-- Axum health/info endpoints
 ```
 
 ## Main components
@@ -30,11 +30,11 @@ Bootstrap relay service
 | Rust protocol | `omnichat/crates/ciphrchat-protocol` | Shared protocol types and rules |
 | Rust routing | `omnichat/crates/ciphrchat-routing` | libp2p transport and discovery foundation |
 | Android FFI | `omnichat/crates/ciphrchat-ffi` | JNI boundary for Rust functionality |
-| Bootstrap service | `omnichat/services/bootstrap-relay` | HTTP health endpoint and deployment foundation |
+| Bootstrap service | `omnichat/services/bootstrap-relay` | Persistent-key libp2p relay, health endpoints, Docker/VPS deployment |
 
 ## Current limitations
 
-- Several UI actions are prototype placeholders, including restore, showing/scanning QR codes, nearby discovery, and invitations.
-- Some experimental transports use mock or simplified behavior.
-- `bootstrap-relay` is not yet a complete public libp2p relay server.
-- The project should not be marketed as a production-secure messenger until its release hardening and independent security review are complete.
+- Contact invitations now carry a peer circuit address and Signal pre-key bundle; scanning and paste/import are wired through the Android UI.
+- Outgoing messages establish/use a Signal session and transport ciphertext through the libp2p request-response path. Message previews are encrypted before entering the SQLCipher database.
+- Several local transports remain hardware- and permission-dependent; experimental media must report unavailable rather than simulate delivery.
+- The relay is production-deployable, but this repository has not yet verified a live VPS, two-device delivery, signed release APK, or independent security review. Do not market the current debug download as a production security release.
