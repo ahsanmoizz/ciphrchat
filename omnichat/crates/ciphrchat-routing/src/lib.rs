@@ -31,17 +31,38 @@ pub struct CiphrChatBehaviour {
 }
 
 pub enum SwarmCommand {
-    AddPeerAddress { peer_id: PeerId, address: Multiaddr },
-    Send { peer_id: PeerId, payload: Vec<u8> },
+    AddPeerAddress {
+        peer_id: PeerId,
+        address: Multiaddr,
+    },
+    Send {
+        peer_id: PeerId,
+        message_id: String,
+        payload: Vec<u8>,
+    },
 }
 
 #[derive(Debug)]
 pub enum ClientEvent {
-    Ready { peer_id: PeerId },
-    InboundMessage { peer_id: PeerId, payload: Vec<u8> },
-    DeliveryAccepted { peer_id: PeerId },
-    DeliveryFailed { peer_id: PeerId, reason: String },
-    NetworkError { detail: String },
+    Ready {
+        peer_id: PeerId,
+    },
+    InboundMessage {
+        peer_id: PeerId,
+        payload: Vec<u8>,
+    },
+    DeliveryAccepted {
+        peer_id: PeerId,
+        message_id: String,
+    },
+    DeliveryFailed {
+        peer_id: PeerId,
+        message_id: String,
+        reason: String,
+    },
+    NetworkError {
+        detail: String,
+    },
 }
 
 fn message_behaviour() -> MessageBehaviour {
@@ -92,7 +113,8 @@ pub async fn run_client(
     swarm.listen_on(relay_listener)?;
     swarm.dial(relay_address)?;
 
-    let mut pending = HashMap::new();
+    let mut pending: HashMap<request_response::OutboundRequestId, (PeerId, String)> =
+        HashMap::new();
     let _ = events.send(ClientEvent::Ready {
         peer_id: local_peer_id,
     });
@@ -105,16 +127,17 @@ pub async fn run_client(
                     if let Err(error) = swarm.dial(address) {
                         let _ = events.send(ClientEvent::DeliveryFailed {
                             peer_id,
+                            message_id: String::new(),
                             reason: format!("dial failed: {error}"),
                         });
                     }
                 }
-                Some(SwarmCommand::Send { peer_id, payload }) => {
+                Some(SwarmCommand::Send { peer_id, message_id, payload }) => {
                     let request_id = swarm.behaviour_mut().messages.send_request(
                         &peer_id,
                         WireMessage { payload },
                     );
-                    pending.insert(request_id, peer_id);
+                    pending.insert(request_id, (peer_id, message_id));
                 }
                 None => break,
             },
@@ -133,12 +156,13 @@ pub async fn run_client(
                                 });
                             }
                             Message::Response { request_id, response } => {
-                                if let Some(peer_id) = pending.remove(&request_id) {
+                                if let Some((peer_id, message_id)) = pending.remove(&request_id) {
                                     if response.accepted {
-                                        let _ = events.send(ClientEvent::DeliveryAccepted { peer_id });
+                                        let _ = events.send(ClientEvent::DeliveryAccepted { peer_id, message_id });
                                     } else {
                                         let _ = events.send(ClientEvent::DeliveryFailed {
                                             peer_id,
+                                            message_id,
                                             reason: "remote peer rejected message".to_owned(),
                                         });
                                     }
@@ -146,9 +170,10 @@ pub async fn run_client(
                             }
                         },
                         request_response::Event::OutboundFailure { peer, request_id, error } => {
-                            pending.remove(&request_id);
+                            let message_id = pending.remove(&request_id).map(|(_, message_id)| message_id).unwrap_or_default();
                             let _ = events.send(ClientEvent::DeliveryFailed {
                                 peer_id: peer,
+                                message_id,
                                 reason: error.to_string(),
                             });
                         }

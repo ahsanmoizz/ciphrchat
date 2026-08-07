@@ -17,6 +17,8 @@ import org.ciphrchat.app.ui.theme.*
 fun SettingsScreen(
     onShareApp: () -> Unit = {},
     onBackupIdentity: () -> Unit = {},
+    onShowQr: () -> Unit = {},
+    onRestoreIdentity: () -> Unit = {},
     backupMessage: String? = null
 ) {
     Column(
@@ -33,38 +35,38 @@ fun SettingsScreen(
         }
 
         CiphrSectionHeader("Identity")
-        SettingsRow("My QR code") {}
-        SettingsRow("Display name") {}
+        SettingsRow("My QR code", onShowQr)
+        SettingsInfoRow("Display name", "Edit from a future profile release")
         SettingsRow("Back up identity") { onBackupIdentity() }
-        SettingsRow("Restore identity") {}
+        SettingsRow("Restore identity", onRestoreIdentity)
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Connections")
-        SettingsRow("Automatic routing") {}
-        SettingsRow("Internet") {}
-        SettingsRow("Wi-Fi") {}
-        SettingsRow("Bluetooth mesh") {}
-        SettingsRow("Experimental methods") {}
+        SettingsInfoRow("Automatic routing", "Always enabled")
+        SettingsInfoRow("Internet", "Configured by the installed build")
+        SettingsInfoRow("Wi-Fi", "Available when local discovery is permitted")
+        SettingsInfoRow("Bluetooth mesh", "Disabled until multi-hop routing is verified")
+        SettingsInfoRow("Experimental methods", "Disabled until independently validated")
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Privacy")
-        SettingsRow("App lock") {}
-        SettingsRow("Local storage") {}
-        SettingsRow("Blocked contacts") {}
-        SettingsRow("Delete local data") {}
+        SettingsInfoRow("App lock", "Not available in this release")
+        SettingsInfoRow("Local storage", "Encrypted local database")
+        SettingsInfoRow("Blocked contacts", "Not available in this release")
+        SettingsInfoRow("Delete local data", "Use Android app storage settings")
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Distribution")
         SettingsRow("Share CiphrChat") { onShareApp() }
-        SettingsRow("Verify installed build") {}
-        SettingsRow("Check for update") {}
+        SettingsInfoRow("Verify installed build", "Compare the release checksum on GitHub")
+        SettingsInfoRow("Check for update", "Install releases from the project page")
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("About")
-        SettingsRow("Source code") {}
-        SettingsRow("Open-source licenses") {}
-        SettingsRow("Security model") {}
-        SettingsRow("Version 0.1.0-dev") {}
+        SettingsInfoRow("Source code", "github.com/ahsanmoizz/ciphrchat")
+        SettingsInfoRow("Open-source licenses", "See the repository notices")
+        SettingsInfoRow("Security model", "See docs/ARCHITECTURE.md")
+        SettingsInfoRow("Version 0.1.0-dev", "Development build")
     }
 }
 
@@ -77,6 +79,15 @@ private fun SettingsRow(label: String, onClick: () -> Unit) {
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge, color = CiphrText)
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = CiphrTextSecondary)
+    }
+    HorizontalDivider(color = CiphrBorder)
+}
+
+@Composable
+private fun SettingsInfoRow(label: String, detail: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = CiphrText)
+        Text(detail, style = MaterialTheme.typography.bodySmall, color = CiphrTextSecondary)
     }
     HorizontalDivider(color = CiphrBorder)
 }

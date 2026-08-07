@@ -29,6 +29,7 @@ import java.util.*
 @Composable
 fun ChatsScreen(
     onConversationClick: (String) -> Unit,
+    onAddContact: () -> Unit,
     viewModel: ChatsViewModel = hiltViewModel()
 ) {
     val conversations by viewModel.conversations.collectAsState()
@@ -53,7 +54,7 @@ fun ChatsScreen(
                 color = CiphrText
             )
             FloatingActionButton(
-                onClick = { /* Add contact — Phase 2 */ },
+                onClick = onAddContact,
                 containerColor = CiphrPrimary,
                 contentColor = CiphrText,
                 shape = CircleShape,

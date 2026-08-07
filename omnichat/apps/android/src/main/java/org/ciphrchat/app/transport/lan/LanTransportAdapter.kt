@@ -20,7 +20,7 @@ class LanTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Connected; NSD Ready")
+        TransportState(kind, TransportAvailability.STARTING, "Local discovery is not started")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -30,6 +30,8 @@ class LanTransportAdapter @Inject constructor(
             lanConnection.startServer(port)
             lanDiscovery.start(port).getOrThrow()
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Listening on port $port")
+        }.onFailure { error ->
+            _state.value = TransportState(kind, TransportAvailability.ERROR, error.message ?: "LAN transport failed")
         }
     }
 

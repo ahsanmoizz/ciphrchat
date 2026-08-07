@@ -1,8 +1,12 @@
 package org.ciphrchat.app.transport.bluetooth
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.bluetooth.*
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +36,11 @@ class BluetoothTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Ready")
+        TransportState(
+            kind,
+            if (hasBluetoothPermissions()) TransportAvailability.STARTING else TransportAvailability.PERMISSION_REQUIRED,
+            if (hasBluetoothPermissions()) "Bluetooth ready to start" else "Bluetooth permissions are required"
+        )
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -40,6 +48,21 @@ class BluetoothTransportAdapter @Inject constructor(
     private val adapter = bluetoothManager?.adapter
 
     override suspend fun start(): Result<Unit> {
+        if (adapter == null) {
+            val error = IllegalStateException("Bluetooth is not available on this device")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
+            return Result.failure(error)
+        }
+        if (!hasBluetoothPermissions()) {
+            val error = SecurityException("Grant Bluetooth nearby-device permissions")
+            _state.value = TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, error.message!!)
+            return Result.failure(error)
+        }
+        if (!adapter.isEnabled) {
+            val error = IllegalStateException("Bluetooth is disabled")
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
+            return Result.failure(error)
+        }
         val adStarted = bleAdvertiser.start()
         val scanStarted = bleScanner.start()
         gattServerManager.start()
@@ -48,7 +71,9 @@ class BluetoothTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
             return Result.success(Unit)
         }
-        return Result.failure(Exception("Bluetooth start failed"))
+        val error = Exception("Bluetooth start failed")
+        _state.value = TransportState(kind, TransportAvailability.ERROR, error.message!!)
+        return Result.failure(error)
     }
 
     override suspend fun stop(): Result<Unit> {
@@ -166,5 +191,14 @@ class BluetoothTransportAdapter @Inject constructor(
         }
 
         gatt = device.connectGatt(context, false, gattCallback)
+    }
+
+    private fun hasBluetoothPermissions(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return listOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE
+        ).all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
     }
 }

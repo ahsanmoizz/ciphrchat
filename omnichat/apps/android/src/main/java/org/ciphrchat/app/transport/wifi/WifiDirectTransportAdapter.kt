@@ -24,16 +24,20 @@ class WifiDirectTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Direct Ready")
+        TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, "Nearby Wi-Fi permission is required")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
         return runCatching {
-            wifiDirectManager.start()
+            if (!wifiDirectManager.start()) {
+                error("Wi-Fi Direct is unavailable or nearby permission is missing")
+            }
             // We use the same generic socket server from LanConnection as Wi-Fi Direct provides a standard IP network.
             lanConnection.startServer(DIRECT_PORT, kind)
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Wi-Fi Direct Started")
+        }.onFailure { error ->
+            _state.value = TransportState(kind, TransportAvailability.ERROR, error.message ?: "Wi-Fi Direct failed")
         }
     }
 
@@ -49,7 +53,6 @@ class WifiDirectTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        // Recipient ID maps to P2P MAC address in this prototype phase
         val peer = wifiDirectManager.discoveredPeers.value.find { it.id == recipientId }
         return if (peer != null) Reachability.Reachable else Reachability.Unreachable("Peer not discovered")
     }
@@ -65,7 +68,6 @@ class WifiDirectTransportAdapter @Inject constructor(
         }
         if (!connected) return SendResult.Failed(Exception("Failed to form Wi-Fi Direct group"))
 
-        // Wait a brief moment for group owner IP to be resolved (omitted robust retry loop for prototype)
         val info = wifiDirectManager.connectionInfo.value
         val goAddress = info?.groupOwnerAddress?.hostAddress 
             ?: return SendResult.Failed(Exception("Group owner IP not available"))

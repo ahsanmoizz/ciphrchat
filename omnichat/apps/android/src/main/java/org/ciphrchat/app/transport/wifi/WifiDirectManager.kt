@@ -1,12 +1,16 @@
 package org.ciphrchat.app.transport.wifi
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.NetworkInfo
 import android.net.wifi.p2p.*
+import android.os.Build
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,7 +20,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-@SuppressLint("MissingPermission") // Simplified for prototype, assuming permissions granted
+@SuppressLint("MissingPermission")
 class WifiDirectManager @Inject constructor(
     private val context: Context
 ) {
@@ -55,8 +59,8 @@ class WifiDirectManager @Inject constructor(
         _connectionInfo.value = info
     }
 
-    fun start() {
-        if (manager == null) return
+    fun start(): Boolean {
+        if (manager == null || !hasNearbyPermission()) return false
         channel = manager?.initialize(context, context.mainLooper, null)
 
         receiver = object : BroadcastReceiver() {
@@ -82,6 +86,7 @@ class WifiDirectManager @Inject constructor(
             override fun onSuccess() {}
             override fun onFailure(reasonCode: Int) {}
         })
+        return true
     }
 
     fun stop() {
@@ -104,5 +109,14 @@ class WifiDirectManager @Inject constructor(
                 onResult(false)
             }
         })
+    }
+
+    private fun hasNearbyPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 }

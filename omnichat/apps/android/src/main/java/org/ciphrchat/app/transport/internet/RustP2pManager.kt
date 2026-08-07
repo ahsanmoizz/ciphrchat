@@ -14,8 +14,8 @@ import javax.inject.Singleton
 sealed interface RustNetworkEvent {
     data class SwarmReady(val peerId: String) : RustNetworkEvent
     data class MessageReceived(val peerId: String, val payload: ByteArray) : RustNetworkEvent
-    data class DeliveryAccepted(val peerId: String) : RustNetworkEvent
-    data class DeliveryFailed(val peerId: String, val reason: String) : RustNetworkEvent
+    data class DeliveryAccepted(val peerId: String, val messageId: String) : RustNetworkEvent
+    data class DeliveryFailed(val peerId: String, val messageId: String, val reason: String) : RustNetworkEvent
     data class NetworkError(val detail: String) : RustNetworkEvent
 }
 
@@ -51,14 +51,14 @@ class RustP2pManager @Inject constructor(
     fun connectPeer(peerId: String, address: String): Boolean =
         nativeConnectPeer(peerId, address)
 
-    fun sendMessage(peerId: String, payload: ByteArray): Boolean =
-        nativeSendMessage(peerId, payload)
+    fun sendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean =
+        nativeSendMessage(peerId, messageId, payload)
 
     fun localPeerId(): String? = nativeLocalPeerId()?.toString()
 
     private external fun nativeStartSwarm(relayAddress: String, keyFile: String): Boolean
     private external fun nativeConnectPeer(peerId: String, address: String): Boolean
-    private external fun nativeSendMessage(peerId: String, payload: ByteArray): Boolean
+    private external fun nativeSendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean
     private external fun nativeLocalPeerId(): String?
 
     companion object {
@@ -78,13 +78,13 @@ class RustP2pManager @Inject constructor(
         }
 
         @JvmStatic
-        fun onDeliveryAccepted(peerId: String) {
-            active?._events?.tryEmit(RustNetworkEvent.DeliveryAccepted(peerId))
+        fun onDeliveryAccepted(peerId: String, messageId: String) {
+            active?._events?.tryEmit(RustNetworkEvent.DeliveryAccepted(peerId, messageId))
         }
 
         @JvmStatic
-        fun onDeliveryFailed(peerId: String, reason: String) {
-            active?._events?.tryEmit(RustNetworkEvent.DeliveryFailed(peerId, reason))
+        fun onDeliveryFailed(peerId: String, messageId: String, reason: String) {
+            active?._events?.tryEmit(RustNetworkEvent.DeliveryFailed(peerId, messageId, reason))
         }
 
         @JvmStatic

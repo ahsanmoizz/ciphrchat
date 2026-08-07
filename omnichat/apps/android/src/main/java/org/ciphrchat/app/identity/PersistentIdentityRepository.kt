@@ -2,6 +2,7 @@ package org.ciphrchat.app.identity
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.ciphrchat.app.app.AppState
 import org.ciphrchat.app.crypto.SignalStoreAdapter
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.IdentityEntity
@@ -12,7 +13,8 @@ import javax.inject.Singleton
 @Singleton
 class PersistentIdentityRepository @Inject constructor(
     private val database: AppDatabase,
-    private val signalStore: SignalStoreAdapter
+    private val signalStore: SignalStoreAdapter,
+    private val appState: AppState
 ) : IdentityRepository {
 
     override suspend fun create(displayName: String): Result<LocalIdentity> = withContext(Dispatchers.IO) {
@@ -48,6 +50,7 @@ class PersistentIdentityRepository @Inject constructor(
     override suspend fun clear(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             database.clearAllTables() // Clear all user data
+            appState.resetOnboarding()
         }
     }
 

@@ -1,10 +1,12 @@
 package org.ciphrchat.app.app
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -18,10 +20,13 @@ import androidx.navigation.navArgument
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.backup.RecoveryManager
+import org.ciphrchat.app.transport.TransportRegistry
 import org.ciphrchat.app.ui.components.BottomNavItem
 import org.ciphrchat.app.ui.components.CiphrBottomBar
 import org.ciphrchat.app.ui.screens.*
@@ -102,10 +107,16 @@ class OnboardingViewModel @Inject constructor(
 
 @HiltViewModel
 class ConnectViewModel @Inject constructor(
-    private val invitationService: InvitationService
+    private val invitationService: InvitationService,
+    private val transportRegistry: TransportRegistry
 ) : ViewModel() {
     var status by mutableStateOf<String?>(null)
         private set
+    var nearbyStatus by mutableStateOf<String?>(null)
+        private set
+
+    val transportStates = transportRegistry.states()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun importInvitation(raw: String) {
         if (raw.isBlank()) return
@@ -115,11 +126,31 @@ class ConnectViewModel @Inject constructor(
                 .onFailure { status = it.message ?: "Invitation could not be imported" }
         }
     }
+
+    fun findNearby() {
+        viewModelScope.launch {
+            nearbyStatus = "Searching nearby connections…"
+            val localAdapters = transportRegistry.all().filter {
+                it.capabilities.contains(org.ciphrchat.app.transport.TransportCapability.DISCOVERY)
+            }
+            val peers = mutableListOf<org.ciphrchat.app.transport.DiscoveredPeer>()
+            for (adapter in localAdapters) {
+                adapter.start()
+                peers += adapter.discoverPeers().getOrDefault(emptyList())
+            }
+            nearbyStatus = if (peers.isEmpty()) {
+                "No paired nearby contacts found"
+            } else {
+                "Found ${peers.size} nearby connection${if (peers.size == 1) "" else "s"}"
+            }
+        }
+    }
 }
 
 @Composable
 fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
     val navController = rememberNavController()
+    val context = LocalContext.current
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
@@ -193,7 +224,6 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                     displayName = id?.displayName ?: "User",
                     fingerprint = id?.fingerprint ?: "0000-0000-0000-0000",
                     qrContent = viewModel.invitation,
-                    onShowQr = { /* QR is always visible */ },
                     onStartMessaging = {
                         viewModel.finishOnboarding()
                         navController.navigate(AppRoute.Chats.route) {
@@ -203,19 +233,17 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 )
             }
             composable(AppRoute.Chats.route) {
-                ChatsScreen(onConversationClick = { id ->
-                    navController.navigate(AppRoute.Chat.create(id))
-                })
+                ChatsScreen(
+                    onConversationClick = { id -> navController.navigate(AppRoute.Chat.create(id)) },
+                    onAddContact = { navController.navigate(AppRoute.Connect.route) }
+                )
             }
             composable(
                 AppRoute.Chat.route,
                 arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
             ) { entry ->
                 val convId = entry.arguments?.getString("conversationId") ?: ""
-                val name = when (convId) {
-                    "conv-sara" -> "Sara"; "conv-ali" -> "Ali"; "conv-usman" -> "Usman"; else -> "Chat"
-                }
-                ChatScreen(contactName = name, onBack = { navController.popBackStack() })
+                ChatScreen(contactName = convId, onBack = { navController.popBackStack() })
             }
             composable(AppRoute.Scanner.route) {
                 val connectViewModel: ConnectViewModel = hiltViewModel()
@@ -231,11 +259,27 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 val connectViewModel: ConnectViewModel = hiltViewModel()
                 ConnectScreen(
                     onScanQr = { navController.navigate(AppRoute.Scanner.route) },
-                    onImportInvitation = connectViewModel::importInvitation
+                    onImportInvitation = connectViewModel::importInvitation,
+                    onShowMyQr = { navController.navigate(AppRoute.IdentityReady.route) },
+                    onFindNearby = connectViewModel::findNearby,
+                    statusMessage = connectViewModel.status,
+                    nearbyStatus = connectViewModel.nearbyStatus,
+                    transportStates = connectViewModel.transportStates
                 )
             }
             composable(AppRoute.Settings.route) {
                 SettingsScreen(
+                    onShareApp = {
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, "Install CiphrChat: https://github.com/ahsanmoizz/ciphrchat/releases")
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Share CiphrChat"))
+                    },
+                    onShowQr = { navController.navigate(AppRoute.IdentityReady.route) },
+                    onRestoreIdentity = {
+                        recoveryPicker.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
+                    },
                     onBackupIdentity = {
                         backupPicker.launch("ciphrchat-recovery.ciphr")
                     },

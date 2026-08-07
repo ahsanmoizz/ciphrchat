@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import android.util.Base64
 import org.json.JSONObject
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.MessageEntity
@@ -45,8 +46,11 @@ class PersistentMessageRepository @Inject constructor(
     init {
         networkScope.launch {
             p2p.events.collect { event ->
-                if (event is RustNetworkEvent.MessageReceived) {
-                    receive(event.peerId, event.payload)
+                when (event) {
+                    is RustNetworkEvent.MessageReceived -> receive(event.peerId, event.payload)
+                    is RustNetworkEvent.DeliveryAccepted -> updateDelivery(event.messageId, MessageStatus.DELIVERED)
+                    is RustNetworkEvent.DeliveryFailed -> updateDelivery(event.messageId, MessageStatus.FAILED)
+                    else -> Unit
                 }
             }
         }
@@ -55,13 +59,17 @@ class PersistentMessageRepository @Inject constructor(
         }
     }
 
-    override fun conversations(): Flow<List<ConversationSummary>> = dao.getAllMessages().map { messages ->
+    override fun conversations(): Flow<List<ConversationSummary>> = combine(
+        dao.getAllMessages(),
+        contacts.observe()
+    ) { messages, contactEntities ->
+        val contactNames = contactEntities.associateBy { it.contactId }
         messages.groupBy { it.conversationId }.map { (conversationId, items) ->
             val last = items.maxByOrNull { it.createdAtEpochMs }
             ConversationSummary(
                 id = conversationId,
-                contactName = contactName(conversationId),
-                contactId = last?.recipientId ?: conversationId,
+                contactName = contactNames[conversationId]?.displayName ?: "Contact ${conversationId.takeLast(8)}",
+                contactId = conversationId,
                 lastMessage = last?.let(::decryptBody).orEmpty(),
                 lastMessageEpochMs = last?.createdAtEpochMs ?: 0L
             )
@@ -90,7 +98,7 @@ class PersistentMessageRepository @Inject constructor(
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
             conversationId = conversationId,
-            senderId = "local",
+            senderId = identity.current()?.publicId ?: error("Local identity is unavailable"),
             recipientId = recipientId,
             body = contentCipher.encrypt(trimmed),
             encryptedPayload = ciphertext.serialize(),
@@ -117,7 +125,7 @@ class PersistentMessageRepository @Inject constructor(
             is SendResult.Rejected -> entity.copy(status = MessageStatus.QUEUED)
             is SendResult.Failed -> entity.copy(status = MessageStatus.FAILED)
             is SendResult.Failure -> entity.copy(status = MessageStatus.FAILED)
-            SendResult.Success -> entity.copy(status = MessageStatus.SENT)
+            SendResult.Success -> entity.copy(status = MessageStatus.QUEUED)
         }
         dao.updateMessage(finalEntity)
         finalEntity.toModel()
@@ -135,8 +143,6 @@ class PersistentMessageRepository @Inject constructor(
         selectedTransport = selectedTransport
     )
 
-    private fun contactName(conversationId: String): String = "Contact ${conversationId.takeLast(8)}"
-
     private fun decryptBody(entity: MessageEntity): String = runCatching {
         contentCipher.decrypt(entity.body)
     }.getOrElse { "Encrypted message" }
@@ -145,8 +151,20 @@ class PersistentMessageRepository @Inject constructor(
         runCatching {
             val contact = contacts.findByPeerId(peerId) ?: return
             val envelope = JSONObject(wirePayload.toString(Charsets.UTF_8))
+            val localId = identity.current()?.publicId ?: return
+            require(envelope.optInt("protocolVersion", 0) == 1) { "Unsupported Internet envelope version" }
+            require(!envelope.optBoolean("testOnly", false)) { "Test-only envelope rejected" }
+            require(envelope.optString("recipientId") == localId) { "Envelope recipient mismatch" }
+            require(envelope.optString("senderId") == contact.contactId) { "Envelope sender mismatch" }
             val messageId = envelope.getString("messageId")
+            require(messageId.isNotBlank()) { "Envelope message ID is missing" }
+            val createdAt = envelope.optLong("createdAtEpochMs", 0L)
+            val expiresAt = envelope.optLong("expiresAtEpochMs", 0L)
+            require(createdAt > 0L && expiresAt >= createdAt && expiresAt >= System.currentTimeMillis()) {
+                "Expired Internet envelope"
+            }
             val ciphertext = Base64.decode(envelope.getString("encryptedPayload"), Base64.NO_WRAP)
+            require(ciphertext.isNotEmpty() && ciphertext.size <= 1_048_576) { "Invalid encrypted payload" }
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
             dao.insertMessage(
@@ -157,7 +175,7 @@ class PersistentMessageRepository @Inject constructor(
                     recipientId = "local",
                     body = contentCipher.encrypt(plaintext.toString(Charsets.UTF_8)),
                     encryptedPayload = ciphertext,
-                    createdAtEpochMs = envelope.optLong("createdAtEpochMs", System.currentTimeMillis()),
+                    createdAtEpochMs = createdAt,
                     direction = MessageDirection.INCOMING,
                     status = MessageStatus.DELIVERED,
                     selectedTransport = "INTERNET_DIRECT"
@@ -167,7 +185,9 @@ class PersistentMessageRepository @Inject constructor(
     }
 
     private suspend fun receiveLocal(envelope: OutboundEnvelope) {
-        if (envelope.testOnly || envelope.expiresAtEpochMs < System.currentTimeMillis()) return
+        val localId = identity.current()?.publicId ?: return
+        if (envelope.testOnly || envelope.protocolVersion != 1 || envelope.recipientId != localId ||
+            envelope.expiresAtEpochMs < System.currentTimeMillis() || envelope.hopLimit !in 0..16) return
         val contact = contacts.find(envelope.senderId) ?: return
         runCatching {
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
@@ -187,5 +207,11 @@ class PersistentMessageRepository @Inject constructor(
                 )
             )
         }
+    }
+
+    private suspend fun updateDelivery(messageId: String, status: MessageStatus) {
+        if (messageId.isBlank()) return
+        val message = dao.findById(messageId) ?: return
+        dao.updateMessage(message.copy(status = status))
     }
 }

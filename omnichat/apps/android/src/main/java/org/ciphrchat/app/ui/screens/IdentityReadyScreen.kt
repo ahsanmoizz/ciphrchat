@@ -28,7 +28,6 @@ fun IdentityReadyScreen(
     displayName: String,
     fingerprint: String,
     qrContent: String? = null,
-    onShowQr: () -> Unit,
     onStartMessaging: () -> Unit
 ) {
     Column(
@@ -120,13 +119,6 @@ fun IdentityReadyScreen(
         }
 
         Spacer(Modifier.weight(1f))
-
-        CiphrSecondaryButton(
-            text = "Show my QR",
-            onClick = onShowQr
-        )
-
-        Spacer(Modifier.height(12.dp))
 
         CiphrPrimaryButton(
             text = "Start messaging",

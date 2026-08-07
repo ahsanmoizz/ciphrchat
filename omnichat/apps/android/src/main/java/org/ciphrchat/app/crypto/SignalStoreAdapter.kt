@@ -1,5 +1,9 @@
 package org.ciphrchat.app.crypto
 
+import android.util.Log
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import org.ciphrchat.app.data.*
 import org.whispersystems.libsignal.IdentityKey
 import org.whispersystems.libsignal.IdentityKeyPair
@@ -20,6 +24,13 @@ import javax.inject.Singleton
 class SignalStoreAdapter @Inject constructor(
     private val database: AppDatabase
 ) : SignalProtocolStore {
+
+    sealed interface SecurityEvent {
+        data object ContactIdentityChanged : SecurityEvent
+    }
+
+    private val _securityEvents = MutableSharedFlow<SecurityEvent>(extraBufferCapacity = 16)
+    val securityEvents: SharedFlow<SecurityEvent> = _securityEvents.asSharedFlow()
 
     private val dao = database.signalCryptoDao()
 
@@ -59,8 +70,8 @@ class SignalStoreAdapter @Inject constructor(
         val existing = existingEntity?.identityKey?.let { IdentityKey(it, 0) }
 
         if (existing != null && existing != identityKey) {
-            // Key change detected - MITM or device change
-            println("SECURITY WARNING: Identity key changed for ${address.name}. Emitting KeyChangeWarning event.")
+            Log.w("CiphrChatSecurity", "A paired contact identity key changed")
+            _securityEvents.tryEmit(SecurityEvent.ContactIdentityChanged)
         }
         
         dao.saveIdentity(SignalIdentityEntity(address.name, identityKey.serialize()))

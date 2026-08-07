@@ -80,7 +80,7 @@ class InternetTransportAdapter @Inject constructor(
             return SendResult.Failed(IllegalStateException("Peer address was rejected by the native network"))
         }
         val payload = envelope.toWirePayload()
-        return if (rustP2pManager.sendMessage(contact.peerId, payload)) {
+        return if (rustP2pManager.sendMessage(contact.peerId, envelope.messageId, payload)) {
             SendResult.Accepted(kind, "native-request-queued")
         } else {
             SendResult.Failed(IllegalStateException("Peer address is not registered or native transport is stopped"))

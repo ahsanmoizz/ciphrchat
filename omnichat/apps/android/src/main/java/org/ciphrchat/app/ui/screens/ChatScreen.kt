@@ -30,6 +30,7 @@ fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val messages by viewModel.messages.collectAsState()
+    val resolvedContactName by viewModel.contactName.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val currentLocale = LocalConfiguration.current.locales[0]
@@ -44,7 +45,7 @@ fun ChatScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(contactName, color = CiphrText)
+                        Text(resolvedContactName ?: contactName, color = CiphrText)
                         Text("Secure conversation", style = MaterialTheme.typography.labelMedium, color = CiphrTextSecondary)
                     }
                 },

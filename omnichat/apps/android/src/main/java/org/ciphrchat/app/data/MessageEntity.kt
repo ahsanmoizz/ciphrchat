@@ -28,6 +28,9 @@ data class MessageEntity(
 
 @Dao
 interface MessageDao {
+    @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
+    suspend fun findById(messageId: String): MessageEntity?
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAtEpochMs ASC")
     fun getMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>
 

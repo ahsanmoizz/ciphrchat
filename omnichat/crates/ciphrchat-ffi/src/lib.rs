@@ -112,29 +112,47 @@ fn dispatch_event(jvm: &JavaVM, event: ClientEvent) {
                 );
             }
         }
-        ClientEvent::DeliveryAccepted { peer_id } => {
-            if let Ok(peer_id) = env.new_string(peer_id.to_string()) {
+        ClientEvent::DeliveryAccepted {
+            peer_id,
+            message_id,
+        } => {
+            if let (Ok(peer_id), Ok(message_id)) = (
+                env.new_string(peer_id.to_string()),
+                env.new_string(message_id),
+            ) {
                 let peer_id_object: JObject<'_> = peer_id.into();
+                let message_id_object: JObject<'_> = message_id.into();
                 call_callback(
                     &mut env,
                     "onDeliveryAccepted",
-                    "(Ljava/lang/String;)V",
-                    &[JValue::Object(&peer_id_object)],
+                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    &[
+                        JValue::Object(&peer_id_object),
+                        JValue::Object(&message_id_object),
+                    ],
                 );
             }
         }
-        ClientEvent::DeliveryFailed { peer_id, reason } => {
-            if let (Ok(peer_id), Ok(reason)) =
-                (env.new_string(peer_id.to_string()), env.new_string(reason))
-            {
+        ClientEvent::DeliveryFailed {
+            peer_id,
+            message_id,
+            reason,
+        } => {
+            if let (Ok(peer_id), Ok(message_id), Ok(reason)) = (
+                env.new_string(peer_id.to_string()),
+                env.new_string(message_id),
+                env.new_string(reason),
+            ) {
                 let peer_id_object: JObject<'_> = peer_id.into();
+                let message_id_object: JObject<'_> = message_id.into();
                 let reason_object: JObject<'_> = reason.into();
                 call_callback(
                     &mut env,
                     "onDeliveryFailed",
-                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
                     &[
                         JValue::Object(&peer_id_object),
+                        JValue::Object(&message_id_object),
                         JValue::Object(&reason_object),
                     ],
                 );
@@ -263,15 +281,21 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     peer_id: JString<'local>,
+    message_id: JString<'local>,
     payload: JByteArray<'local>,
 ) -> jboolean {
     let parsed_peer = jstring(&mut env, peer_id)
         .ok()
         .and_then(|value| value.parse().ok());
     let payload = env.convert_byte_array(payload).ok();
-    match (command_sender(), parsed_peer, payload) {
-        (Some(sender), Some(peer_id), Some(payload)) => sender
-            .send(SwarmCommand::Send { peer_id, payload })
+    let message_id = jstring(&mut env, message_id).ok();
+    match (command_sender(), parsed_peer, message_id, payload) {
+        (Some(sender), Some(peer_id), Some(message_id), Some(payload)) => sender
+            .send(SwarmCommand::Send {
+                peer_id,
+                message_id,
+                payload,
+            })
             .map(|_| 1)
             .unwrap_or(0),
         _ => 0,

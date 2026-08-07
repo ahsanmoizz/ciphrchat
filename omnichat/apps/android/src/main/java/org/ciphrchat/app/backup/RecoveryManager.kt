@@ -16,6 +16,7 @@ import org.ciphrchat.app.messaging.MessageDirection
 import org.ciphrchat.app.messaging.MessageStatus
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
@@ -71,7 +72,7 @@ class RecoveryManager @Inject constructor(
             require(passwordForImport.length >= MIN_PASSWORD_LENGTH) {
                 "Recovery password must be at least $MIN_PASSWORD_LENGTH characters"
             }
-            val bytes = inputStream.use { it.readBytes() }
+            val bytes = inputStream.use(::readBounded)
             require(bytes.size <= MAX_FILE_BYTES) { "Recovery file is too large" }
             require(bytes.size > HEADER.size + SALT_BYTES + IV_BYTES) { "Recovery file is incomplete" }
             require(bytes.copyOfRange(0, HEADER.size).contentEquals(HEADER)) {
@@ -138,6 +139,20 @@ class RecoveryManager @Inject constructor(
     }
 
     private fun randomBytes(size: Int) = ByteArray(size).apply { SecureRandom().nextBytes(this) }
+
+    private fun readBounded(input: InputStream): ByteArray {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            require(total <= MAX_FILE_BYTES) { "Recovery file is too large" }
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray()
+    }
 
     private companion object {
         val HEADER = "CIPHR_RECOVERY_V2\n".toByteArray(Charsets.UTF_8)

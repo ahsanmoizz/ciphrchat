@@ -38,6 +38,8 @@ object TransportWireCodec {
         val hopLimit = input.readInt()
         val testOnly = input.readBoolean()
         val payload = readField(input, MAX_PAYLOAD_BYTES)
+        require(protocolVersion == 1) { "Unsupported CiphrChat local transport version" }
+        require(hopLimit in 0..16) { "Invalid local transport hop limit" }
         require(messageId.isNotBlank() && recipientId.isNotBlank() && senderId.isNotBlank()) { "Incomplete CiphrChat envelope" }
         return OutboundEnvelope(protocolVersion, messageId, recipientId, senderId, createdAt, expiresAt, hopLimit, payload, testOnly)
     }
