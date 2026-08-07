@@ -22,9 +22,6 @@ object TransportModule {
     fun internet(adapter: InternetTransportAdapter): TransportAdapter = adapter
 
     @Provides @IntoSet
-    fun internetRelay(adapter: InternetRelayTransportAdapter): TransportAdapter = adapter
-
-    @Provides @IntoSet
     fun wifiLan(adapter: LanTransportAdapter): TransportAdapter = adapter
 
     @Provides @IntoSet
@@ -54,4 +51,3 @@ object TransportModule {
     @Provides @IntoSet
     fun external(adapter: ExternalTransportAdapter): TransportAdapter = adapter
 }
-

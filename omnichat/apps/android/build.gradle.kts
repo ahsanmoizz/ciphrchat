@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "org.ciphrchat.app"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.ciphrchat.app"
