@@ -4,7 +4,9 @@ services:
     ports:
       - "4001:4001/tcp"
       - "4001:4001/udp"
-      - "8080:8080/tcp"
+      # Keep health/info private; the deployment workflow checks it over SSH.
+      # A Cloudflare Tunnel may proxy this loopback port later if desired.
+      - "127.0.0.1:8080:8080/tcp"
     volumes:
       - relay-data:/var/lib/ciphrchat
     restart: unless-stopped

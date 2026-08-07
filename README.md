@@ -96,7 +96,7 @@ docker compose up -d --build
 curl http://127.0.0.1:8080/health
 ```
 
-Open TCP/UDP port `4001` and TCP port `8080` in the VPS firewall. The relay identity is persisted in the `relay-data` volume, so do not delete that volume during upgrades. GitHub Actions also provides a manual **Deploy relay to VPS** workflow; configure `CIPHRCHAT_VPS_HOST`, `CIPHRCHAT_VPS_USER`, and `CIPHRCHAT_VPS_SSH_KEY` secrets (plus optional `CIPHRCHAT_VPS_PORT`) before running it.
+Open TCP/UDP port `4001` in the VPS firewall. Do not open `8080` publicly; health/info stay on loopback and are checked over SSH. The relay identity is persisted in the `relay-data` volume, so do not delete that volume during upgrades. GitHub Actions also provides a manual **Deploy relay to VPS** workflow; configure `CIPHRCHAT_VPS_HOST`, `CIPHRCHAT_VPS_USER`, and `CIPHRCHAT_VPS_SSH_KEY` secrets (plus optional `CIPHRCHAT_VPS_PORT`) before running it.
 
 Vercel is suitable for a web landing page or short HTTP API, but it is not a suitable host for this relay: libp2p requires a continuously running process with inbound TCP and UDP listeners. Use the VPS for the relay and Vercel only for optional web assets.
 
