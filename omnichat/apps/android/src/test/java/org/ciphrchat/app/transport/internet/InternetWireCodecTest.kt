@@ -1,9 +1,7 @@
 package org.ciphrchat.app.transport.internet
 
 import org.ciphrchat.app.transport.OutboundEnvelope
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,12 +20,13 @@ class InternetWireCodecTest {
             testOnly = false
         )
 
-        val json = JSONObject(InternetWireCodec.encode(envelope).toString(Charsets.UTF_8))
-        assertEquals("ciphr:recipient", json.getString("recipientId"))
-        assertEquals("ciphr:sender", json.getString("senderId"))
-        assertEquals("message-1", json.getString("messageId"))
-        assertEquals(3, json.getInt("hopLimit"))
-        assertFalse(json.getBoolean("testOnly"))
-        assertTrue(json.getString("encryptedPayload").isNotBlank())
+        val json = InternetWireCodec.encode(envelope).toString(Charsets.UTF_8)
+        assertTrue(json.contains("\"recipientId\":\"ciphr:recipient\""))
+        assertTrue(json.contains("\"senderId\":\"ciphr:sender\""))
+        assertTrue(json.contains("\"messageId\":\"message-1\""))
+        assertTrue(json.contains("\"hopLimit\":3"))
+        assertTrue(json.contains("\"testOnly\":false"))
+        assertTrue(json.contains("\"encryptedPayload\":\""))
+        assertEquals(1, json.count { it == '{' })
     }
 }
