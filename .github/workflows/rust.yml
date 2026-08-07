@@ -1,0 +1,50 @@
+name: Rust
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check shared Rust formatting
+        working-directory: omnichat/crates
+        run: cargo fmt --all --check
+
+      - name: Run shared Rust clippy
+        working-directory: omnichat/crates
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run shared Rust tests
+        working-directory: omnichat/crates
+        run: cargo test --workspace
+
+      - name: Check relay formatting
+        working-directory: omnichat/services/bootstrap-relay
+        run: cargo fmt --all --check
+
+      - name: Check relay package
+        working-directory: omnichat/services/bootstrap-relay
+        run: cargo check --locked
+
+      - name: Test relay package
+        working-directory: omnichat/services/bootstrap-relay
+        run: cargo test --locked
+
+      - name: Build relay container
+        working-directory: omnichat/services/bootstrap-relay
+        run: docker build --tag ciphrchat-bootstrap-relay:ci .

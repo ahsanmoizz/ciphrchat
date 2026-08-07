@@ -81,24 +81,36 @@ mod tests {
     #[test]
     fn unsupported_version_fails() {
         let e = test_envelope(2, 5000, 3, 100);
-        assert!(matches!(e.validate_structure(1000), Err(ProtocolError::UnsupportedVersion(2))));
+        assert!(matches!(
+            e.validate_structure(1000),
+            Err(ProtocolError::UnsupportedVersion(2))
+        ));
     }
 
     #[test]
     fn expired_envelope_fails() {
         let e = test_envelope(1, 500, 3, 100);
-        assert!(matches!(e.validate_structure(1000), Err(ProtocolError::Expired)));
+        assert!(matches!(
+            e.validate_structure(1000),
+            Err(ProtocolError::Expired)
+        ));
     }
 
     #[test]
     fn invalid_hop_limit_fails() {
         let e = test_envelope(1, 5000, 8, 100);
-        assert!(matches!(e.validate_structure(1000), Err(ProtocolError::InvalidHopLimit)));
+        assert!(matches!(
+            e.validate_structure(1000),
+            Err(ProtocolError::InvalidHopLimit)
+        ));
     }
 
     #[test]
     fn oversized_payload_fails() {
         let e = test_envelope(1, 5000, 3, 65 * 1024);
-        assert!(matches!(e.validate_structure(1000), Err(ProtocolError::PayloadTooLarge)));
+        assert!(matches!(
+            e.validate_structure(1000),
+            Err(ProtocolError::PayloadTooLarge)
+        ));
     }
 }

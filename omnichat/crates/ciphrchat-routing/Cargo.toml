@@ -5,8 +5,10 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-libp2p = { version = "0.53", features = ["tcp", "quic", "noise", "yamux", "identify", "tokio", "macros", "kad", "autonat", "relay", "rendezvous", "dcutr"] }
+libp2p = { version = "0.53.2", features = ["tcp", "quic", "noise", "yamux", "identify", "tokio", "macros", "relay", "dcutr", "request-response", "cbor"] }
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+futures = "0.3"
 
 [features]
 server = []

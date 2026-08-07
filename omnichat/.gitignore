@@ -22,6 +22,8 @@ captures/
 target/
 **/*.rs.bk
 Cargo.lock
+!crates/Cargo.lock
+!services/bootstrap-relay/Cargo.lock
 
 # OS
 .DS_Store

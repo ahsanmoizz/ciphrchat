@@ -2,5 +2,12 @@ services:
   relay:
     build: .
     ports:
-      - "8080:8080"
+      - "4001:4001/tcp"
+      - "4001:4001/udp"
+      - "8080:8080/tcp"
+    volumes:
+      - relay-data:/var/lib/ciphrchat
     restart: unless-stopped
+
+volumes:
+  relay-data:
