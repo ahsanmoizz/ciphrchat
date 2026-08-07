@@ -73,6 +73,10 @@ class WifiAwareTransportAdapter @Inject constructor(
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult = withContext(Dispatchers.IO) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            return@withContext SendResult.Failure(Exception("Wi-Fi Aware networking requires Android 10 or newer"))
+        }
+
         val targetId = String(envelope.recipientTag)
         val network = wifiAwareService.requestNetwork(targetId) 
             ?: return@withContext SendResult.Failure(Exception("Failed to form Wi-Fi Aware network"))
