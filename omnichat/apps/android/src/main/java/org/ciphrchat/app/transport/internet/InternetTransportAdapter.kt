@@ -1,13 +1,11 @@
 package org.ciphrchat.app.transport.internet
 
-import android.util.Base64
 import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.identity.ContactRepository
 import org.ciphrchat.app.transport.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -79,7 +77,7 @@ class InternetTransportAdapter @Inject constructor(
         if (!rustP2pManager.connectPeer(contact.peerId, contact.relayAddress)) {
             return SendResult.Failed(IllegalStateException("Peer address was rejected by the native network"))
         }
-        val payload = envelope.toWirePayload()
+        val payload = InternetWireCodec.encode(envelope)
         return if (rustP2pManager.sendMessage(contact.peerId, envelope.messageId, payload)) {
             SendResult.Accepted(kind, "native-request-queued")
         } else {
@@ -87,14 +85,4 @@ class InternetTransportAdapter @Inject constructor(
         }
     }
 
-    private fun OutboundEnvelope.toWirePayload(): ByteArray = JSONObject()
-        .put("protocolVersion", protocolVersion)
-        .put("messageId", messageId)
-        .put("senderId", senderId)
-        .put("createdAtEpochMs", createdAtEpochMs)
-        .put("expiresAtEpochMs", expiresAtEpochMs)
-        .put("hopLimit", hopLimit)
-        .put("encryptedPayload", Base64.encodeToString(encryptedPayload, Base64.NO_WRAP))
-        .toString()
-        .encodeToByteArray()
 }

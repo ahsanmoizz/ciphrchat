@@ -1,13 +1,11 @@
 package org.ciphrchat.app.transport.internet
 
-import android.content.Context
 import android.util.Log
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import org.ciphrchat.app.BuildConfig
-import java.io.File
+import org.ciphrchat.app.security.PeerKeyStore
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,12 +19,10 @@ sealed interface RustNetworkEvent {
 
 @Singleton
 class RustP2pManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    private val peerKeyStore: PeerKeyStore
 ) {
     private val _events = MutableSharedFlow<RustNetworkEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<RustNetworkEvent> = _events.asSharedFlow()
-
-    private val peerKeyFile = File(context.filesDir, "ciphrchat-peer-key.bin")
 
     init {
         active = this
@@ -42,7 +38,10 @@ class RustP2pManager @Inject constructor(
             return Result.failure(IllegalStateException("No CiphrChat relay address is configured"))
         }
         return runCatching {
-            check(nativeStartSwarm(relayAddress, peerKeyFile.absolutePath)) {
+            val started = peerKeyStore.withNativeKeyFile { keyFile ->
+                nativeStartSwarm(relayAddress, keyFile)
+            }
+            check(started) {
                 "Native relay client rejected startup"
             }
         }
