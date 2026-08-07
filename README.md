@@ -22,7 +22,7 @@ If the button is temporarily unavailable, use the GitHub Actions artifact:
 3. Download the `app-debug` artifact and unzip it.
 4. Install `android-debug.apk` on an Android device.
 
-You can also browse the [CiphrChat releases](https://github.com/ahsanmoizz/ciphrchat/releases).
+You can also browse the [CiphrChat releases](https://github.com/ahsanmoizz/ciphrchat/releases). The `latest` download is a development/debug artifact. A signed public release is published only by the tag-triggered **Android Release** workflow after the release keystore is configured.
 
 You can install it with Android Debug Bridge as well:
 
@@ -38,6 +38,8 @@ On the first launch:
 4. Tap **Start messaging** to open the app.
 
 For Internet messaging, the APK must be built with the repository variable `CIPHRCHAT_RELAY_ADDRESS` set to the deployed relay multiaddress. Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
+
+The current verified local message routes are Internet/libp2p relay, LAN, Wi-Fi Direct, and Bluetooth GATT. IR, NFC, UWB, ultrasound, Wi-Fi Aware messaging, and Bluetooth mesh forwarding remain visibly experimental or unavailable until their authenticated inbound protocols and hardware test matrix are complete. See [production status](docs/PRODUCTION_STATUS.md) for the release gates.
 
 ## Build from source
 
@@ -65,6 +67,17 @@ cd omnichat
 cargo check --manifest-path services/bootstrap-relay/Cargo.toml
 cargo test --workspace
 ```
+
+### Signed Android release
+
+Do not commit a keystore. Add these GitHub repository secrets before creating a `v*.*.*` tag or manually running [Android Release](https://github.com/ahsanmoizz/ciphrchat/actions/workflows/android-release.yml):
+
+- `ANDROID_KEYSTORE_BASE64`
+- `KEYSTORE_PASSWORD`
+- `KEY_ALIAS`
+- `KEY_PASSWORD`
+
+The workflow fails if the keystore or any password is missing, builds the release with Rust JNI libraries, verifies it with `apksigner`, and publishes the APK plus SHA-256 checksum for a version tag.
 
 ## Relay deployment
 

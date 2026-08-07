@@ -38,3 +38,4 @@ Bootstrap relay service
 - Outgoing messages establish/use a Signal session and transport ciphertext through the libp2p request-response path. Message previews are encrypted before entering the SQLCipher database.
 - Several local transports remain hardware- and permission-dependent; experimental media must report unavailable rather than simulate delivery.
 - The relay is production-deployable, but this repository has not yet verified a live VPS, two-device delivery, signed release APK, or independent security review. Do not market the current debug download as a production security release.
+- The authoritative release checklist is [PRODUCTION_STATUS.md](PRODUCTION_STATUS.md); it distinguishes code/CI verification from live-network and hardware verification.

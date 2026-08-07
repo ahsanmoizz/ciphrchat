@@ -1,42 +1,22 @@
 # STATE.md — Project Memory
 
-> **Last Updated**: 2026-08-07
-> **Current Phase**: MILESTONE COMPLETE (Gaps Closed)
-> **Session**: Active (resumed 2026-08-07)
+> Last Updated: 2026-08-07
+> Status: Production hardening in progress
 
-## Gap Closure Mode
-All 5 gaps from milestone audit have been addressed and VERIFIED.
+## Current truth
 
-## Active Context
+- Android debug and Rust/Docker CI are green for the latest pushed transport framing change when its runs complete.
+- The app has persistent encrypted local state and an actual Internet/libp2p relay path.
+- LAN, Wi-Fi Direct, and Bluetooth GATT now have bounded framed envelopes and inbound dispatch.
+- Unsupported or incomplete media paths are explicitly experimental/unavailable; they must not report delivery.
+- No live VPS relay, signed public APK, two-device hardware test, or independent security audit has been verified in this workspace.
 
-- Phase 1 Foundation completed
-- Phase 2 Persistent Local Foundation completed and **VERIFIED**
-- Phase 3 Real Local Network completed and **VERIFIED**
-- Phase 4 Bluetooth completed and **VERIFIED**
-- Phase 5 Internet P2P completed and **VERIFIED**
-- Phase 6 Production Encryption completed and **VERIFIED**
-- Phase 7 Experimental Routes completed and **VERIFIED**
-- Phase 8 Release Hardening completed and **VERIFIED**
-- Phase 9 Gap Closure completed and **VERIFIED**
-- **MILESTONE v0.2.0-dev COMPLETE**
+## Operational blockers
 
-## Decisions Made
+- A VPS host/user/SSH key and the repository relay variable are required for live deployment.
+- A user-owned Android release keystore must be configured as GitHub Secrets before publishing a signed APK.
+- Hardware access is required to validate local transports and recovery/restart behavior.
 
-- Following directive exactly — no redesign
-- Using pinned dependency versions from directive Section 9.4
-- Phase 1 foundation is a "runnable scaffold" not production-secure
-- All mock/stub code must be explicitly labeled test-only
+## Rule
 
-## Blockers
-
-- None currently
-
-## Key Facts
-
-- Product: OmniChat — "One identity. Every connection."
-- License: AGPL-3.0
-- Platform: Android (Kotlin/Compose) + Rust core + Rust server
-- Design: White/black/light-purple, Changelly-inspired
-- Navigation: Exactly 3 tabs — Chats, Connect, Settings
-- Transport adapters: 12 kinds (Internet, Wi-Fi LAN, Wi-Fi Aware, Wi-Fi Direct, BT Direct, BT Mesh, Ultrasound, IR, NFC, UWB, Internet Relay, External)
-- Seed contacts: Sara, Ali, Usman
+Evidence is required before changing any production gate to complete. See `docs/PRODUCTION_STATUS.md`.

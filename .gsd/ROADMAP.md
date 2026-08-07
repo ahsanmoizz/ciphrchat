@@ -1,49 +1,22 @@
-# ROADMAP.md
+# Roadmap (truthful status)
 
-> **Current Phase**: Phase 2
-> **Milestone**: v0.2.0-dev (Persistent Local Foundation)
+This directory is internal development history, not a public release promise. The repository is not yet an audited production release.
 
-## Phases
+## Completed and CI-verified
 
-### Phase 1: Foundation Scaffold
-**Status**: ✅ Complete
-**Objective**: Compiling Android debug APK, exact UI design, mocked transport adapters, prototype identity, Rust workspace, and CI.
+- Persistent SQLCipher-backed identity, Signal state, contacts, encrypted previews, outbox payloads, and password-protected recovery snapshots.
+- Rust/libp2p client foundation, JNI bridge, relay service, Docker Compose deployment, health/info endpoints, and manual VPS workflow.
+- Invitation pairing and Internet request-response delivery path.
+- Bounded authenticated local envelope framing for LAN, Wi-Fi Direct, and Bluetooth GATT with inbound event dispatch.
+- Android debug build/lint and Rust/Docker CI.
+- Fail-closed signed-release workflow that requires a real keystore and verifies the APK signature/checksum.
 
-### Phase 2: Persistent Local Foundation
-**Status**: ✅ Complete
-**Objective**: SQLCipher database, Android Keystore-wrapped database key, persistent identity, contact QR generation and scanning, persistent messages and queue, encrypted recovery file format.
+## Still required for a production release
 
-### Phase 3: Real Local Network
-**Status**: ✅ Complete
-**Objective**: Shared LAN discovery, authenticated socket session, real Wi-Fi Direct, real Wi-Fi Aware, device-to-device test matrix.
+- Deploy and verify a live VPS relay, configure `CIPHRCHAT_RELAY_ADDRESS`, and complete two-device Internet delivery.
+- Configure a release keystore and publish a signed versioned APK.
+- Execute the Android hardware test matrix: restart, recovery, pairing, queue/retry, reconnect, duplicate delivery, key change, LAN, Wi-Fi Direct, and Bluetooth GATT.
+- Finish or keep disabled the authenticated protocols for Wi-Fi Aware messaging, Bluetooth mesh forwarding, ultrasound, IR, NFC message transfer, and UWB payloads.
+- Complete threat-model review, dependency/signing review, and independent security assessment.
 
-### Phase 4: Bluetooth
-**Status**: ✅ Complete
-**Objective**: BLE advertisements, GATT transfer, reliable chunking and ACKs, mesh envelope forwarding, hop limit, battery-aware operation.
-
-### Phase 5: Internet P2P
-**Status**: ✅ Complete
-**Objective**: rust-libp2p peer identity, QUIC/TCP, bootstrap discovery, Kademlia, NAT reachability, hole punching, circuit relay, rendezvous data.
-
-### Phase 6: Production Encryption
-**Status**: ✅ Complete
-**Objective**: Pinned libsignal adapter, session establishment, ratcheted messages, key-change detection, safety-number/QR verification, migration tests.
-
-### Phase 7: Experimental Routes
-**Status**: ✅ Complete
-**Objective**: Ultrasound modem PoC, Reed-Solomon correction, infrared hardware experiments, UWB-assisted confirmation, NFC pairing.
-
-### Phase 8: Release Hardening
-**Status**: ✅ Complete
-**Objective**: Fuzzing, threat-model review, dependency review, reproducible builds, signed APK, public bootstrap/relay deployment, security audit.
-
-### Phase 9: Gap Closure
-**Status**: ✅ Complete
-**Objective**: Address critical gaps from milestone audit (persistence, bridging, hardcoded mocks)
-
-**Gaps to Close:**
-- [x] SignalStoreAdapter uses in-memory map instead of SQLCipher (Phase 6)
-- [x] AutomaticRouter does not broadcast envelopes via TransportManager (Phase 6)
-- [x] RecoveryManager uses weak SHA-256 instead of PBKDF2/Argon2 (Phase 2)
-- [x] WifiAware uses hardcoded IP/PSK (Phase 3)
-- [x] Missing JNI callbacks for Rust libp2p messages (Phase 5)
+See `docs/PRODUCTION_STATUS.md` for the current release gates. Do not mark these items complete without evidence.

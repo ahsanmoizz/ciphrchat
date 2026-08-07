@@ -65,7 +65,7 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        SendResult.Rejected("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
+        return SendResult.Rejected("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
     }
 
     private fun checkBatteryState() {
