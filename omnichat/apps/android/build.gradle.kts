@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
     implementation(libs.guava)
+    implementation(libs.signal.protocol.java)
 
     ksp(libs.hilt.compiler)
     ksp(libs.room.compiler)

@@ -47,7 +47,7 @@ camerax-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "ca
 camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
-
+signal-protocol-java = { module = "org.whispersystems:signal-protocol-java", version = "2.8.1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
