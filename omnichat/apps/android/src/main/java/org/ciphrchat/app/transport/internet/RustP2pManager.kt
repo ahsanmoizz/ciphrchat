@@ -24,3 +24,4 @@ class RustP2pManager @Inject constructor() {
             // Here, it would be pushed to a Kotlin Flow/Channel for the app to consume.
         }
     }
+}

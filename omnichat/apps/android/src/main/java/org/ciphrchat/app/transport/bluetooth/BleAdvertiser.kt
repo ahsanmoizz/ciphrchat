@@ -31,7 +31,10 @@ class BleAdvertiser @Inject constructor(
 
     private var advertiseCallback: AdvertiseCallback? = null
 
-    suspend fun start(): Boolean = suspendCoroutine { cont ->
+    suspend fun start(): Boolean {
+        val identity = identityRepository.current() ?: return false
+
+        return suspendCoroutine { cont ->
         if (advertiser == null) {
             cont.resume(false)
             return@suspendCoroutine
@@ -39,12 +42,6 @@ class BleAdvertiser @Inject constructor(
 
         if (isAdvertising) {
             cont.resume(true)
-            return@suspendCoroutine
-        }
-
-        val identity = identityRepository.current()
-        if (identity == null) {
-            cont.resume(false)
             return@suspendCoroutine
         }
 
@@ -77,6 +74,7 @@ class BleAdvertiser @Inject constructor(
         }
 
         advertiser.startAdvertising(settings, data, advertiseCallback)
+        }
     }
 
     fun stop() {

@@ -10,6 +10,10 @@ import android.net.wifi.aware.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.transport.DiscoveredPeer
 import org.ciphrchat.app.transport.TransportKind
@@ -30,6 +34,7 @@ class WifiAwareService @Inject constructor(
     private var awareSession: WifiAwareSession? = null
     private var publishSession: PublishDiscoverySession? = null
     private var subscribeSession: SubscribeDiscoverySession? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _discoveredPeers = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = _discoveredPeers.asStateFlow()
@@ -57,17 +62,19 @@ class WifiAwareService @Inject constructor(
     }
 
     private fun startPublishing() {
-        val identity = identityRepository.current() ?: return
-        val config = PublishConfig.Builder()
-            .setServiceName("ciphrchat_aware")
-            .setServiceSpecificInfo(identity.publicId.toByteArray())
-            .build()
-            
-        awareSession?.publish(config, object : DiscoverySessionCallback() {
-            override fun onPublishStarted(session: PublishDiscoverySession) {
-                publishSession = session
-            }
-        }, null)
+        scope.launch {
+            val identity = identityRepository.current() ?: return@launch
+            val config = PublishConfig.Builder()
+                .setServiceName("ciphrchat_aware")
+                .setServiceSpecificInfo(identity.publicId.toByteArray())
+                .build()
+
+            awareSession?.publish(config, object : DiscoverySessionCallback() {
+                override fun onPublishStarted(session: PublishDiscoverySession) {
+                    publishSession = session
+                }
+            }, null)
+        }
     }
 
     private fun startSubscribing() {
