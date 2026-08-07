@@ -72,6 +72,21 @@ fn message_behaviour() -> MessageBehaviour {
     )
 }
 
+/// Invitations carry the relay's base address. A message dial must target the
+/// recipient's circuit address on that relay, not the relay itself.
+fn recipient_relay_address(address: Multiaddr, peer_id: PeerId) -> Multiaddr {
+    if address
+        .iter()
+        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit))
+    {
+        address
+    } else {
+        address
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(peer_id))
+    }
+}
+
 pub async fn run_client(
     local_key: identity::Keypair,
     relay_address: Multiaddr,
@@ -123,8 +138,9 @@ pub async fn run_client(
         tokio::select! {
             command = commands.recv() => match command {
                 Some(SwarmCommand::AddPeerAddress { peer_id, address }) => {
-                    swarm.add_peer_address(peer_id, address.clone());
-                    if let Err(error) = swarm.dial(address) {
+                    let recipient_address = recipient_relay_address(address, peer_id);
+                    swarm.add_peer_address(peer_id, recipient_address.clone());
+                    if let Err(error) = swarm.dial(recipient_address) {
                         let _ = events.send(ClientEvent::DeliveryFailed {
                             peer_id,
                             message_id: String::new(),
@@ -223,4 +239,43 @@ pub async fn start_swarm() -> Result<(), Box<dyn Error + Send + Sync>> {
         event_tx,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recipient_relay_address;
+    use libp2p::{identity, Multiaddr, PeerId};
+
+    #[test]
+    fn invitation_relay_address_is_expanded_to_recipient_circuit_route() {
+        let relay_peer_id = PeerId::from(identity::Keypair::generate_ed25519().public());
+        let relay: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_peer_id}")
+            .parse()
+            .unwrap();
+        let peer_id = PeerId::from(identity::Keypair::generate_ed25519().public());
+
+        let route = recipient_relay_address(relay, peer_id);
+
+        assert!(route
+            .iter()
+            .any(|protocol| { matches!(protocol, libp2p::multiaddr::Protocol::P2pCircuit) }));
+        assert!(route.iter().any(|protocol| {
+            matches!(protocol, libp2p::multiaddr::Protocol::P2p(candidate) if candidate == peer_id)
+        }));
+    }
+
+    #[test]
+    fn existing_recipient_circuit_route_is_not_modified() {
+        let peer_id = PeerId::from(identity::Keypair::generate_ed25519().public());
+        let relay_peer_id = PeerId::from(identity::Keypair::generate_ed25519().public());
+        let relay: Multiaddr = format!("/ip4/127.0.0.1/tcp/4001/p2p/{relay_peer_id}")
+            .parse()
+            .unwrap();
+        let existing = relay
+            .clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+            .with(libp2p::multiaddr::Protocol::P2p(peer_id));
+
+        assert_eq!(recipient_relay_address(existing.clone(), peer_id), existing);
+    }
 }
