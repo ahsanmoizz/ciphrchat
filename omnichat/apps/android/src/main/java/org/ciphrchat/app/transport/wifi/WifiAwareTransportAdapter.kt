@@ -14,9 +14,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.wifi.aware.WifiAwareNetworkInfo
 
 @Singleton
 class WifiAwareTransportAdapter @Inject constructor(
+    private val context: Context,
     private val wifiAwareService: WifiAwareService
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.WIFI_AWARE
@@ -75,10 +79,16 @@ class WifiAwareTransportAdapter @Inject constructor(
         
         runCatching {
             val socket = network.socketFactory.createSocket()
-            // Note: In a real Aware implementation, IPv6 LLA is discovered out of band via Aware messaging. 
-            // For this phase, we mock the IP to just verify the network pipeline compiles and runs.
-            val mockIpv6 = Inet6Address.getByName("fe80::1")
-            socket.connect(java.net.InetSocketAddress(mockIpv6, 12347))
+            
+            // Extract the IP/Port dynamically from the WifiAwareNetworkInfo
+            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            val awareInfo = capabilities?.transportInfo as? WifiAwareNetworkInfo
+            
+            val targetIpv6 = awareInfo?.peerIpv6Addr ?: Inet6Address.getByName("fe80::1") // Fallback if API fails
+            val targetPort = awareInfo?.port?.takeIf { it > 0 } ?: 12347
+
+            socket.connect(java.net.InetSocketAddress(targetIpv6, targetPort))
             
             val out = DataOutputStream(socket.getOutputStream())
             out.writeByte(1)

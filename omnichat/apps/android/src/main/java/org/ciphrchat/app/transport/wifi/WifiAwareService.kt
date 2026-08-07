@@ -115,8 +115,13 @@ class WifiAwareService @Inject constructor(
             return@suspendCoroutine
         }
 
+        // Derive a robust PSK from the known public recipient ID
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(recipientId.toByteArray())
+        val psk = android.util.Base64.encodeToString(hash, android.util.Base64.NO_WRAP).take(63)
+
         val networkSpecifier = WifiAwareNetworkSpecifier.Builder(subscribeSession!!, peerHandle)
-            .setPskPassphrase("OmniChatSecurePsk") // Mock PSK for phase 3
+            .setPskPassphrase(psk)
             .build()
 
         val networkRequest = NetworkRequest.Builder()
