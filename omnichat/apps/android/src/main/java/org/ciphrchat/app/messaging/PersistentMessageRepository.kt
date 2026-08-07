@@ -1,6 +1,13 @@
 package org.ciphrchat.app.messaging
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import android.util.Base64
+import org.json.JSONObject
 import kotlinx.coroutines.flow.map
 import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
@@ -8,6 +15,8 @@ import org.ciphrchat.app.data.MessageEntity
 import org.ciphrchat.app.identity.ContactRepository
 import org.ciphrchat.app.identity.InvitationCodec
 import org.ciphrchat.app.security.MessageContentCipher
+import org.ciphrchat.app.transport.internet.RustNetworkEvent
+import org.ciphrchat.app.transport.internet.RustP2pManager
 import org.ciphrchat.app.transport.AutomaticRouter
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
@@ -22,10 +31,22 @@ class PersistentMessageRepository @Inject constructor(
     private val router: AutomaticRouter,
     private val contacts: ContactRepository,
     private val sessions: SignalSessionManager,
-    private val contentCipher: MessageContentCipher
+    private val contentCipher: MessageContentCipher,
+    private val p2p: RustP2pManager
 ) : MessageRepository {
 
     private val dao = database.messageDao()
+    private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        networkScope.launch {
+            p2p.events.collect { event ->
+                if (event is RustNetworkEvent.MessageReceived) {
+                    receive(event.peerId, event.payload)
+                }
+            }
+        }
+    }
 
     override fun conversations(): Flow<List<ConversationSummary>> = dao.getAllMessages().map { messages ->
         messages.groupBy { it.conversationId }.map { (conversationId, items) ->
@@ -110,4 +131,28 @@ class PersistentMessageRepository @Inject constructor(
     private fun decryptBody(entity: MessageEntity): String = runCatching {
         contentCipher.decrypt(entity.body)
     }.getOrElse { "Encrypted message" }
+
+    private suspend fun receive(peerId: String, wirePayload: ByteArray) {
+        runCatching {
+            val contact = contacts.findByPeerId(peerId) ?: return
+            val envelope = JSONObject(wirePayload.toString(Charsets.UTF_8))
+            val messageId = envelope.getString("messageId")
+            val ciphertext = Base64.decode(envelope.getString("encryptedPayload"), Base64.NO_WRAP)
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
+            dao.insertMessage(
+                MessageEntity(
+                    id = messageId,
+                    conversationId = contact.contactId,
+                    senderId = contact.contactId,
+                    recipientId = "local",
+                    body = contentCipher.encrypt(plaintext.toString(Charsets.UTF_8)),
+                    createdAtEpochMs = envelope.optLong("createdAtEpochMs", System.currentTimeMillis()),
+                    direction = MessageDirection.INCOMING,
+                    status = MessageStatus.DELIVERED,
+                    selectedTransport = "INTERNET_DIRECT"
+                )
+            )
+        }
+    }
 }

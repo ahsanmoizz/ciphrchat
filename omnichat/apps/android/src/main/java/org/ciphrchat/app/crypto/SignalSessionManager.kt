@@ -59,4 +59,12 @@ class SignalSessionManager @Inject constructor(
             else -> throw IllegalArgumentException("Unknown ciphertext message type")
         }
     }
+
+    fun decryptSerializedMessage(address: SignalProtocolAddress, serialized: ByteArray): ByteArray {
+        return runCatching {
+            decryptMessage(address, PreKeySignalMessage(serialized))
+        }.getOrElse {
+            decryptMessage(address, SignalMessage(serialized))
+        }
+    }
 }
