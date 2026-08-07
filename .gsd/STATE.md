@@ -12,8 +12,8 @@
 - Phase 4 Bluetooth completed and **VERIFIED**
 - Phase 5 Internet P2P completed and **VERIFIED**
 - Phase 6 Production Encryption completed and **VERIFIED**
-- Phase 7 Experimental Routes completed and **VERIFIED** (Ultrasound, NFC, UWB, Infrared)
-- Ready for Phase 8: Release Hardening
+- Phase 7 Experimental Routes completed and **VERIFIED**
+- Phase 8 Planning complete. Ready for execution.
 
 ## Decisions Made
 
