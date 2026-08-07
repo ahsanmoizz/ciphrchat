@@ -8,12 +8,22 @@ CiphrChat is an open-source Android messaging prototype built around a local-fir
 
 ## Try the Android app
 
-The easiest way to try the current build is to download the APK produced by GitHub Actions:
+<p>
+  <a href="https://github.com/ahsanmoizz/ciphrchat/releases/download/latest/android-debug.apk">
+    <strong>⬇ Download the latest Android APK</strong>
+  </a>
+</p>
+
+The button downloads the latest build directly. On Android, open the downloaded APK and confirm **Install**. Android may ask you to allow your browser or file manager to install apps from unknown sources.
+
+If the button is temporarily unavailable, use the GitHub Actions artifact:
 
 1. Open the [Android CI workflow](https://github.com/ahsanmoizz/ciphrchat/actions/workflows/android.yml).
 2. Open the latest run with a green check mark.
 3. Download the `app-debug` artifact and unzip it.
 4. Install `android-debug.apk` on an Android device.
+
+You can also browse the [CiphrChat releases](https://github.com/ahsanmoizz/ciphrchat/releases).
 
 You can install it with Android Debug Bridge as well:
 
