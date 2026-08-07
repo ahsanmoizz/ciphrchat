@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.ciphrchat.app.messaging.ChatViewModel
@@ -31,6 +32,7 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val currentLocale = LocalConfiguration.current.locales[0]
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -81,7 +83,7 @@ fun ChatScreen(
             items(messages, key = { it.id }) { message ->
                 CiphrMessageBubble(
                     text = message.body,
-                    time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.createdAtEpochMs)),
+                    time = SimpleDateFormat("HH:mm", currentLocale).format(Date(message.createdAtEpochMs)),
                     isOutgoing = message.direction == MessageDirection.OUTGOING,
                     statusLabel = if (message.direction == MessageDirection.OUTGOING) message.status.name.lowercase() else null
                 )
