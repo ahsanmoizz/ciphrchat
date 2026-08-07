@@ -19,3 +19,12 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
         }
     });
 }
+
+#[no_mangle]
+pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_publishMessage(
+    _env: JNIEnv,
+    _class: JClass,
+    _payload: jni::objects::JByteArray,
+) {
+    // In a full implementation, this payload is sent to the running Tokio channel for Gossipsub
+}
