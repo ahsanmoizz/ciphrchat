@@ -44,6 +44,10 @@ jobs:
       working-directory: ./omnichat
       run: ./gradlew lint
 
+    - name: Run Android unit tests
+      working-directory: ./omnichat
+      run: ./gradlew testDebugUnitTest
+
     - name: Upload APK
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:

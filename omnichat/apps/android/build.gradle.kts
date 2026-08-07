@@ -114,6 +114,8 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.signal.protocol.java)
 
+    testImplementation(libs.junit)
+
     ksp(libs.hilt.compiler)
     ksp(libs.room.compiler)
 
