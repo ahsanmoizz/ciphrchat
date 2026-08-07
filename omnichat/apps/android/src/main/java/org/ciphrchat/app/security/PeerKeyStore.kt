@@ -60,7 +60,7 @@ class PeerKeyStore @Inject constructor(
     }
 
     private fun isEncryptedContainer(file: File): Boolean =
-        file.isFile && file.length() in 1..MAX_CONTAINER_BYTES && isEncryptedContainer(file.readBytes())
+        file.isFile && file.length() in 1L..MAX_CONTAINER_BYTES.toLong() && isEncryptedContainer(file.readBytes())
 
     private fun isEncryptedContainer(bytes: ByteArray): Boolean =
         bytes.size > MAGIC.size && bytes.copyOfRange(0, MAGIC.size).contentEquals(MAGIC)
