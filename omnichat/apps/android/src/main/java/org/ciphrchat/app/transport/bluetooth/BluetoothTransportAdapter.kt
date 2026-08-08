@@ -97,9 +97,12 @@ class BluetoothTransportAdapter @Inject constructor(
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
         val discoveryToken = discoveryTokenFor(envelope.recipientId)
-        return suspendCoroutine { cont ->
         val deviceMac = bleScanner.deviceAddressFor(discoveryToken)
-            ?: return@suspendCoroutine cont.resume(SendResult.Rejected("Peer not discovered over Bluetooth"))
+            ?: return SendResult.Rejected("Peer not discovered over Bluetooth")
+        return sendToDevice(deviceMac, envelope)
+    }
+
+    suspend fun sendToDevice(deviceMac: String, envelope: OutboundEnvelope): SendResult = suspendCoroutine { cont ->
         val device = adapter?.getRemoteDevice(deviceMac)
         
         if (device == null) {
@@ -112,25 +115,33 @@ class BluetoothTransportAdapter @Inject constructor(
             DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
             buffer.toByteArray()
         }
-        val mtu = 512 // Request highest MTU, assume 512 for now
+        var negotiatedMtu = 23
         var offset = 0
+        var completed = false
+
+        fun complete(result: SendResult) {
+            if (completed) return
+            completed = true
+            cont.resume(result)
+        }
         
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    g.requestMtu(512)
+                    g.requestMtu(517)
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     g.close()
-                    if (offset < payload.size) {
-                        cont.resume(SendResult.Failure(Exception("Disconnected before send complete")))
-                    }
+                    if (!completed) complete(SendResult.Failure(Exception("Disconnected before send complete")))
                 }
             }
 
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
-                    g.discoverServices()
+                    negotiatedMtu = mtu.coerceAtLeast(23)
                 }
+                // Service discovery is required even when the peer rejects the
+                // larger MTU; the default 23-byte MTU remains usable.
+                g.discoverServices()
             }
 
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -142,13 +153,13 @@ class BluetoothTransportAdapter @Inject constructor(
             override fun onCharacteristicWrite(g: BluetoothGatt, char: BluetoothGattCharacteristic, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     if (offset >= payload.size) {
-                        cont.resume(SendResult.Accepted(kind, "ble-gatt-frame"))
+                        complete(SendResult.Accepted(kind, "ble-gatt-frame"))
                         g.disconnect()
                     } else {
                         writeNextChunk(g)
                     }
                 } else {
-                    cont.resume(SendResult.Failure(Exception("Write failed with status $status")))
+                    complete(SendResult.Failure(Exception("Write failed with status $status")))
                     g.disconnect()
                 }
             }
@@ -158,13 +169,14 @@ class BluetoothTransportAdapter @Inject constructor(
                 val characteristic = service?.getCharacteristic(GattServerManager.GATT_CHARACTERISTIC_UUID)
                 
                 if (characteristic == null) {
-                    cont.resume(SendResult.Failure(Exception("GATT Service/Characteristic not found")))
+                    complete(SendResult.Failure(Exception("GATT Service/Characteristic not found")))
                     g.disconnect()
                     return
                 }
 
-                // Chunk size: MTU - 3 (header overhead) - 1/5 (our protocol overhead)
-                val chunkSize = minOf(mtu - 10, 500)
+                // ATT carries MTU - 3 bytes. Five bytes are reserved for the
+                // first chunk's framing header and one byte for continuations.
+                val chunkSize = minOf(negotiatedMtu - 3, 500)
                 val remaining = payload.size - offset
                 val take = minOf(chunkSize, remaining)
                 
@@ -189,12 +201,38 @@ class BluetoothTransportAdapter @Inject constructor(
                 offset += take
                 
                 characteristic.value = chunk
-                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                g.writeCharacteristic(characteristic)
+                // Use acknowledged writes: every chunk advances only after the
+                // receiver confirms it, preventing silent loss on busy phones.
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                if (!g.writeCharacteristic(characteristic)) {
+                    complete(SendResult.Failure(Exception("Bluetooth rejected GATT write")))
+                    g.disconnect()
+                }
             }
         }
 
         gatt = device.connectGatt(context, false, gattCallback)
+    }
+
+    fun hasDiscoveredPeers(): Boolean = bleScanner.discoveredDeviceAddresses().isNotEmpty()
+
+    suspend fun broadcastEnvelope(envelope: OutboundEnvelope): SendResult {
+        val peers = bleScanner.discoveredDeviceAddresses()
+        if (peers.isEmpty()) return SendResult.Rejected("No Bluetooth mesh neighbors discovered")
+        var accepted = 0
+        var lastError: Throwable? = null
+        for (peer in peers) {
+            when (val result = sendToDevice(peer, envelope)) {
+                is SendResult.Accepted -> accepted++
+                is SendResult.Failed -> lastError = result.error
+                is SendResult.Failure -> lastError = result.error
+                else -> Unit
+            }
+        }
+        return if (accepted > 0) {
+            SendResult.Accepted(TransportKind.BLUETOOTH_MESH, "mesh-flood-$accepted")
+        } else {
+            SendResult.Failed(lastError ?: IllegalStateException("No Bluetooth mesh neighbor accepted the frame"))
         }
     }
 

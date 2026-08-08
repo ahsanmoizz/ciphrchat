@@ -4,23 +4,36 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.ciphrchat.app.identity.IdentityRepository
-import org.ciphrchat.app.transport.*
+import org.ciphrchat.app.transport.DiscoveredPeer
+import org.ciphrchat.app.transport.OutboundEnvelope
+import org.ciphrchat.app.transport.Reachability
+import org.ciphrchat.app.transport.SendResult
+import org.ciphrchat.app.transport.TransportAdapter
+import org.ciphrchat.app.transport.TransportAvailability
+import org.ciphrchat.app.transport.TransportCapability
+import org.ciphrchat.app.transport.TransportInboundBus
+import org.ciphrchat.app.transport.TransportKind
+import org.ciphrchat.app.transport.TransportState
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 @Singleton
 class BluetoothMeshTransportAdapter @Inject constructor(
     private val context: Context,
-    private val bluetoothTransportAdapter: BluetoothTransportAdapter, // re-using direct adapter to send
+    private val bluetoothTransportAdapter: BluetoothTransportAdapter,
     private val meshRouter: MeshRouter,
-    private val identityRepository: IdentityRepository
+    private val identityRepository: IdentityRepository,
+    private val inboundBus: TransportInboundBus
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.BLUETOOTH_MESH
     override val capabilities: Set<TransportCapability> = setOf(
@@ -31,53 +44,69 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.EXPERIMENTAL, "Mesh forwarding requires authenticated neighbor routing")
+        TransportState(kind, TransportAvailability.STARTING, "Bluetooth mesh is not started")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
-    private var isBatteryLow = false
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var started = false
+    private var forwardingJob: Job? = null
 
     override suspend fun start(): Result<Unit> {
         checkBatteryState()
-        
         if (isBatteryLow) {
-            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "Battery too low for mesh routing")
-            return Result.failure(Exception("Low Battery"))
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "Mesh routing paused to protect battery")
+            return Result.failure(IllegalStateException("Battery too low for Bluetooth mesh"))
         }
-
-        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "Bluetooth direct messaging is available; mesh forwarding is disabled")
+        val direct = bluetoothTransportAdapter.start()
+        if (direct.isFailure) {
+            _state.value = TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, "Bluetooth access is required for mesh routing")
+            return direct
+        }
+        if (!started) {
+            started = true
+            forwardingJob = scope.launch {
+                inboundBus.events.collect { event ->
+                    if (!started) return@collect
+                    val localId = identityRepository.current()?.publicId ?: return@collect
+                    if (event.transport != TransportKind.BLUETOOTH_DIRECT && event.transport != TransportKind.BLUETOOTH_MESH) return@collect
+                    val envelope = event.envelope
+                    if (!meshRouter.shouldForward(envelope, localId)) return@collect
+                    bluetoothTransportAdapter.broadcastEnvelope(meshRouter.prepareForForwarding(envelope))
+                }
+            }
+        }
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Authenticated Bluetooth mesh forwarding ready")
         return Result.success(Unit)
     }
 
     override suspend fun stop(): Result<Unit> {
+        started = false
+        forwardingJob?.cancel()
+        forwardingJob = null
+        bluetoothTransportAdapter.stop()
         _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }
 
-    override suspend fun discoverPeers(): Result<List<DiscoveredPeer>> {
-        // Mesh relies on Bluetooth direct peers plus potentially multi-hop paths if we had a routing table
-        return bluetoothTransportAdapter.discoverPeers()
-    }
+    override suspend fun discoverPeers(): Result<List<DiscoveredPeer>> =
+        bluetoothTransportAdapter.discoverPeers()
 
-    override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.Unreachable("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
-    }
+    override suspend fun canReach(recipientId: String): Reachability =
+        if (bluetoothTransportAdapter.hasDiscoveredPeers()) Reachability.Reachable
+        else Reachability.Unreachable("No Bluetooth mesh neighbors discovered")
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        return SendResult.Rejected("Bluetooth mesh forwarding is disabled until neighbor routing is authenticated")
+        meshRouter.markOrigin(envelope)
+        return bluetoothTransportAdapter.broadcastEnvelope(envelope)
     }
 
+    private var isBatteryLow = false
+
     private fun checkBatteryState() {
-        val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        val batteryStatus = context.registerReceiver(null, intentFilter)
-        
-        val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        
-        if (level != -1 && scale != -1) {
-            val batteryPct = level * 100 / scale.toFloat()
-            isBatteryLow = batteryPct < 15.0f // Disable mesh routing below 15%
-        }
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        isBatteryLow = level >= 0 && scale > 0 && level * 100f / scale < 15f
     }
 }

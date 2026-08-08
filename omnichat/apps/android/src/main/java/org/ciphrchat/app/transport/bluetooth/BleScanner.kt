@@ -95,4 +95,6 @@ class BleScanner @Inject constructor(
 
     fun deviceAddressFor(peerId: String): String? =
         discoveredMap.entries.firstOrNull { it.value.id == peerId }?.key
+
+    fun discoveredDeviceAddresses(): List<String> = discoveredMap.keys.toList()
 }

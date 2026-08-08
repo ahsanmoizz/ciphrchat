@@ -38,6 +38,17 @@ class MeshRouter @Inject constructor() {
         return envelope.hopLimit > 0
     }
 
+    fun markOrigin(envelope: OutboundEnvelope) {
+        seenMessageIds.add(envelope.messageId)
+        if (seenMessageIds.size > MAX_CACHE_SIZE) {
+            val iterator = seenMessageIds.iterator()
+            if (iterator.hasNext()) {
+                iterator.next()
+                iterator.remove()
+            }
+        }
+    }
+
     fun prepareForForwarding(envelope: OutboundEnvelope): OutboundEnvelope {
         // Decrement hop limit for the next hop
         return envelope.copy(hopLimit = envelope.hopLimit - 1)
