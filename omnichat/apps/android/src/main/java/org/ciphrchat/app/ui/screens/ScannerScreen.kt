@@ -17,7 +17,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -33,15 +32,18 @@ import org.ciphrchat.app.ui.theme.CiphrBackground
 import org.ciphrchat.app.ui.theme.CiphrText
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.launch
 
 @Composable
 fun ScannerScreen(
-    onScanResult: (String) -> Unit,
+    onScanResult: suspend (String) -> Result<Unit>,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scanCompleted = remember { AtomicBoolean(false) }
+    val coroutineScope = rememberCoroutineScope()
+    var scanError by remember { mutableStateOf<String?>(null) }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -88,11 +90,17 @@ fun ScannerScreen(
                             try {
                                 if (!scanCompleted.get()) {
                                     val text = decodeQr(imageProxy)
-                                    if (text?.trimStart()?.startsWith("{") == true &&
+                                    if (text != null &&
                                         scanCompleted.compareAndSet(false, true)
                                     ) {
                                         ContextCompat.getMainExecutor(ctx).execute {
-                                            onScanResult(text)
+                                            coroutineScope.launch {
+                                                val result = onScanResult(text)
+                                                result.onFailure {
+                                                    scanError = it.message ?: "This QR code could not be paired"
+                                                    scanCompleted.set(false)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -127,6 +135,26 @@ fun ScannerScreen(
                     .align(Alignment.BottomCenter)
                     .padding(32.dp)
             )
+
+            scanError?.let { message ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(24.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(message, color = MaterialTheme.colorScheme.onErrorContainer)
+                        TextButton(onClick = {
+                            scanError = null
+                            scanCompleted.set(false)
+                        }) {
+                            Text("Try again")
+                        }
+                    }
+                }
+            }
         }
     } else {
         Column(
@@ -179,9 +207,7 @@ private fun decodeQr(image: ImageProxy): String? {
     for (candidate in candidates) {
         runCatching {
             MultiFormatReader().decode(BinaryBitmap(HybridBinarizer(candidate))).text
-        }.onSuccess { text ->
-            if (text.trimStart().startsWith("{")) return text
-        }
+        }.getOrNull()?.let { return it }
     }
     return null
 }

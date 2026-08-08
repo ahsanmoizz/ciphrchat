@@ -129,10 +129,18 @@ class ConnectViewModel @Inject constructor(
     fun importInvitation(raw: String) {
         if (raw.isBlank()) return
         viewModelScope.launch {
-            invitationService.importInvitation(raw)
-                .onSuccess { status = "Paired with ${it.displayName}" }
-                .onFailure { status = it.message ?: "Invitation could not be imported" }
+            importInvitationResult(raw)
         }
+    }
+
+    suspend fun importInvitationResult(raw: String): Result<String> {
+        if (raw.isBlank()) return Result.failure(IllegalArgumentException("The invitation is empty"))
+        return invitationService.importInvitation(raw)
+            .map { contact ->
+                status = "Paired with ${contact.displayName}"
+                contact.contactId
+            }
+            .onFailure { status = it.message ?: "Invitation could not be imported" }
     }
 
     fun findNearby() {
@@ -267,8 +275,15 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 val connectViewModel: ConnectViewModel = hiltViewModel()
                 ScannerScreen(
                     onScanResult = { raw ->
-                        connectViewModel.importInvitation(raw)
-                        navController.popBackStack()
+                        connectViewModel.importInvitationResult(raw).fold(
+                            onSuccess = { contactId ->
+                                navController.navigate(AppRoute.Chat.create(contactId)) {
+                                    popUpTo(AppRoute.Scanner.route) { inclusive = true }
+                                }
+                                Result.success(Unit)
+                            },
+                            onFailure = { Result.failure(it) }
+                        )
                     },
                     onCancel = { navController.popBackStack() }
                 )
