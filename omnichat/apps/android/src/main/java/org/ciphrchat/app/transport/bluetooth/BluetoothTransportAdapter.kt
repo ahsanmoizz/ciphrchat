@@ -14,12 +14,13 @@ import org.ciphrchat.app.transport.*
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import org.ciphrchat.app.transport.TransportWireCodec
 import org.ciphrchat.app.identity.ContactRepository
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Singleton
 @SuppressLint("MissingPermission")
@@ -106,12 +107,14 @@ class BluetoothTransportAdapter @Inject constructor(
         return sendToDevice(deviceMac, envelope)
     }
 
-    suspend fun sendToDevice(deviceMac: String, envelope: OutboundEnvelope): SendResult = suspendCoroutine { cont ->
+    suspend fun sendToDevice(deviceMac: String, envelope: OutboundEnvelope): SendResult =
+        withTimeoutOrNull(20_000L) {
+            suspendCancellableCoroutine { cont ->
         val device = adapter?.getRemoteDevice(deviceMac)
         
         if (device == null) {
             cont.resume(SendResult.Failure(Exception("Invalid MAC address")))
-            return@suspendCoroutine
+            return@suspendCancellableCoroutine
         }
 
         var gatt: BluetoothGatt? = null
@@ -121,12 +124,10 @@ class BluetoothTransportAdapter @Inject constructor(
         }
         var negotiatedMtu = 23
         var offset = 0
-        var completed = false
+        val completed = AtomicBoolean(false)
 
         fun complete(result: SendResult) {
-            if (completed) return
-            completed = true
-            cont.resume(result)
+            if (completed.compareAndSet(false, true) && cont.isActive) cont.resume(result)
         }
         
         val gattCallback = object : BluetoothGattCallback() {
@@ -135,7 +136,7 @@ class BluetoothTransportAdapter @Inject constructor(
                     g.requestMtu(517)
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     g.close()
-                    if (!completed) complete(SendResult.Failure(Exception("Disconnected before send complete")))
+                    complete(SendResult.Failure(Exception("Disconnected before send complete")))
                 }
             }
 
@@ -216,7 +217,12 @@ class BluetoothTransportAdapter @Inject constructor(
         }
 
         gatt = device.connectGatt(context, false, gattCallback)
+        cont.invokeOnCancellation {
+            gatt?.disconnect()
+            gatt?.close()
+        }
     }
+        } ?: SendResult.Failure(IllegalStateException("Bluetooth send timed out"))
 
     fun hasDiscoveredPeers(): Boolean = bleScanner.discoveredDeviceAddresses().isNotEmpty()
 

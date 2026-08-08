@@ -41,8 +41,7 @@ class NfcTransportAdapter @Inject constructor(
             return Result.failure(Exception("NFC disabled"))
         }
 
-        // In full implementation, we'd enable Reader Mode or Host Card Emulation
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Tap another CiphrChat phone to transfer encrypted messages")
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "NFC tap transfer ready")
         return Result.success(Unit)
     }
 
