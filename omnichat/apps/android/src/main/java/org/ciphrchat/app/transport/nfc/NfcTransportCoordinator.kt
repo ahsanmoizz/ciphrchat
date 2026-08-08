@@ -202,7 +202,7 @@ class NfcTransportCoordinator @Inject constructor(
                     ((bytes[2].toInt() and 0xFF) shl 8) or (bytes[3].toInt() and 0xFF)
             } else -1
             if (bytes.size > 4) incoming.write(bytes, 4, bytes.size - 4)
-        } else if (offset == incoming.size()) {
+        } else if (offset - 4 == incoming.size()) {
             incoming.write(bytes)
         }
         if (incomingExpected in 1..MAX_FRAME_BYTES && incoming.size() >= incomingExpected) {
