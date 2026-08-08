@@ -5,24 +5,17 @@
 CiphrChat is an open-source Android messaging app built around a persistent local identity, Signal Protocol sessions, and multiple direct or relayed transports. The repository includes the Android client, Rust/libp2p networking, and the deployable relay service.
 
 
-## Try the Android app
+## Install CiphrChat
 
 <p>
   <a href="https://github.com/ahsanmoizz/ciphrchat/releases/download/latest/android-debug.apk">
-    <strong>⬇ Download the latest Android APK</strong>
+    <strong>Download the latest CiphrChat Android APK</strong>
   </a>
 </p>
 
-The button downloads the latest build directly. On Android, open the downloaded APK and confirm **Install**. Android may ask you to allow your browser or file manager to install apps from unknown sources.
+Click the button above, open the downloaded `android-debug.apk` on your Android phone, and tap **Install**. Android may ask you to allow your browser or file manager to install apps from this source; allow it once and return to the installer.
 
-If the button is temporarily unavailable, use the GitHub Actions artifact:
-
-1. Open the [Android CI workflow](https://github.com/ahsanmoizz/ciphrchat/actions/workflows/android.yml).
-2. Open the latest run with a green check mark.
-3. Download the `app-debug` artifact and unzip it.
-4. Install `android-debug.apk` on an Android device.
-
-You can also browse the [CiphrChat releases](https://github.com/ahsanmoizz/ciphrchat/releases). The `latest` download is a development/debug artifact. A signed public release is published only by the tag-triggered **Android Release** workflow after the release keystore is configured.
+This download always points to the newest build. You do not need to open GitHub Actions or download the source code. The [release page](https://github.com/ahsanmoizz/ciphrchat/releases/tag/latest) is available if you want the build details and checksum.
 
 You can install it with Android Debug Bridge as well:
 
