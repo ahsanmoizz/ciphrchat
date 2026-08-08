@@ -183,6 +183,14 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         }
     }
 
+    LaunchedEffect(viewModel.identity, currentRoute) {
+        if (currentRoute == AppRoute.CreateIdentity.route && viewModel.identity != null) {
+            navController.navigate(AppRoute.EnableConnections.route) {
+                popUpTo(AppRoute.CreateIdentity.route) { inclusive = true }
+            }
+        }
+    }
+
     val mainRoutes = setOf(AppRoute.Chats.route, AppRoute.Connect.route, AppRoute.Settings.route)
     val showBottomBar = currentRoute in mainRoutes
 
@@ -214,7 +222,6 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
             composable(AppRoute.CreateIdentity.route) {
                 CreateIdentityScreen { name ->
                     viewModel.createIdentity(name)
-                    navController.navigate(AppRoute.EnableConnections.route)
                 }
             }
             composable(AppRoute.EnableConnections.route) {

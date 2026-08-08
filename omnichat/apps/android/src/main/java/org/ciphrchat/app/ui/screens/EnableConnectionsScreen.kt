@@ -6,6 +6,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.HorizontalDivider
@@ -18,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.ui.components.CiphrPrimaryButton
 import org.ciphrchat.app.ui.components.CiphrTransportRow
 import org.ciphrchat.app.ui.theme.*
@@ -27,6 +30,8 @@ fun EnableConnectionsScreen(
     onEnable: () -> Unit
 ) {
     var permissionMessage by remember { mutableStateOf<String?>(null) }
+    val scrollState = rememberScrollState()
+    val relayConfigured = BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isNotBlank()
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
@@ -56,6 +61,7 @@ fun EnableConnectionsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .background(CiphrBackground)
             .padding(horizontal = 32.dp)
             .statusBarsPadding()
@@ -64,7 +70,7 @@ fun EnableConnectionsScreen(
         Spacer(Modifier.height(80.dp))
 
         Text(
-            text = "Enable communication",
+            text = "Choose your connections",
             style = MaterialTheme.typography.headlineLarge,
             color = CiphrText
         )
@@ -72,42 +78,49 @@ fun EnableConnectionsScreen(
         Spacer(Modifier.height(8.dp))
 
         Text(
-            text = "CiphrChat uses the connection methods available on this device.",
+            text = "Internet messaging is ready. Nearby connections are optional and require permission.",
             style = MaterialTheme.typography.bodyMedium,
             color = CiphrTextSecondary
         )
 
         Spacer(Modifier.height(24.dp))
 
-        CiphrTransportRow(Icons.Default.Public, "Internet", "Ready when relay is configured", CiphrTextSecondary)
+        CiphrTransportRow(
+            Icons.Default.Public,
+            "Internet",
+            if (relayConfigured) "Secure messaging ready" else "Unavailable in this build",
+            if (relayConfigured) CiphrSuccess else CiphrDanger
+        )
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Wifi, "Wi-Fi and Wi-Fi Direct", "Permission requested below", CiphrWarning)
+        CiphrTransportRow(Icons.Default.Wifi, "Wi-Fi and Wi-Fi Direct", "Nearby permission", CiphrWarning)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Bluetooth, "Bluetooth direct", "Permission requested below", CiphrWarning)
+        CiphrTransportRow(Icons.Default.Bluetooth, "Bluetooth direct", "Nearby permission", CiphrWarning)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Disabled: experimental", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.WifiTethering, "Wi-Fi Aware", "Compatible devices", CiphrTextSecondary)
+        HorizontalDivider(color = CiphrBorder)
+        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Not a secure message route", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.Nfc, "NFC", "Pairing only", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Not detected", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity assist only", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Not detected", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Not a secure message route", CiphrTextSecondary)
 
         permissionMessage?.let {
             Spacer(Modifier.height(12.dp))
             Text(it, style = MaterialTheme.typography.bodySmall, color = CiphrTextSecondary)
         }
 
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
 
         CiphrPrimaryButton(
-            text = "Enable available connections",
+            text = "Continue",
             onClick = {
                 if (nearbyPermissions.isEmpty()) onEnable()
                 else permissionLauncher.launch(nearbyPermissions)
             }
         )
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(40.dp))
     }
 }

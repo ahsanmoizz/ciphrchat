@@ -1,6 +1,7 @@
 package org.ciphrchat.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -10,9 +11,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import org.ciphrchat.app.R
 import org.ciphrchat.app.ui.components.CiphrPrimaryButton
 import org.ciphrchat.app.ui.components.CiphrTextButton
 import org.ciphrchat.app.ui.theme.CiphrBackground
@@ -59,24 +62,14 @@ fun WelcomeScreen(
             Spacer(Modifier.weight(1f))
 
             // Logo placeholder — will use actual logo asset
-            Box(
-                modifier = Modifier
-                    .size(80.dp)
-                    .background(Color(0xFFC7B5FF), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("C", fontSize = 36.sp, color = CiphrText)
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                text = "CiphrChat",
-                style = MaterialTheme.typography.displayLarge,
-                color = CiphrText
+            Image(
+                painter = painterResource(R.drawable.ciphrchatlogo),
+                contentDescription = "CiphrChat logo",
+                modifier = Modifier.size(width = 240.dp, height = 150.dp),
+                contentScale = ContentScale.Fit
             )
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(16.dp))
 
             Text(
                 text = "One identity. Every connection.",
@@ -87,7 +80,7 @@ fun WelcomeScreen(
             Spacer(Modifier.height(16.dp))
 
             Text(
-                text = "Communicate through internet, Wi-Fi, Bluetooth\nand every supported connection around you.",
+                text = "Secure private messaging over the Internet, Wi-Fi, Bluetooth, and nearby connections.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CiphrTextSecondary,
                 textAlign = TextAlign.Center

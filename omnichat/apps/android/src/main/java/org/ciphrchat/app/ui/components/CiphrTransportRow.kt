@@ -40,9 +40,10 @@ fun CiphrTransportRow(
             .fillMaxWidth()
             .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -55,10 +56,15 @@ fun CiphrTransportRow(
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodyLarge,
-                color = CiphrText
+                color = CiphrText,
+                modifier = Modifier.weight(1f)
             )
         }
-        CiphrStatusPill(text = status, color = statusColor)
+        CiphrStatusPill(
+            text = status,
+            color = statusColor,
+            modifier = Modifier.widthIn(max = 160.dp)
+        )
     }
 }
 
