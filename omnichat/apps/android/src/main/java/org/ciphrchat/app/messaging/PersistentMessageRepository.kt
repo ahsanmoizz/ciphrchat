@@ -190,6 +190,18 @@ class PersistentMessageRepository @Inject constructor(
             SendResult.Success -> entity.copy(status = MessageStatus.QUEUED)
         }
         dao.updateMessage(finalEntity)
+        if (finalEntity.status == MessageStatus.FAILED || finalEntity.status == MessageStatus.QUEUED) {
+            val detail = when (val failure = result) {
+                is SendResult.Rejected -> failure.reason
+                is SendResult.Failed -> failure.error.message
+                is SendResult.Failure -> failure.error.message
+                SendResult.Success -> "No transport verified delivery"
+                is SendResult.Accepted -> null
+            }
+            if (!detail.isNullOrBlank()) {
+                throw IllegalStateException("Message not delivered: $detail")
+            }
+        }
         return finalEntity.toModel()
     }
 

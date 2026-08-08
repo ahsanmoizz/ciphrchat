@@ -57,10 +57,10 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
         val encrypted = source.readBytes()
         require(encrypted.size > IV_BYTES) { "Attachment is incomplete" }
         val iv = encrypted.copyOfRange(0, IV_BYTES)
-        val plaintext = Cipher.getInstance(TRANSFORMATION).run {
-            init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-            doFinal(encrypted.copyOfRange(IV_BYTES, encrypted.size))
-        }
+        val ciphertext = encrypted.copyOfRange(IV_BYTES, encrypted.size)
+        val plaintext = runCatching { decryptWithKey(key(), iv, ciphertext) }
+            .recoverCatching { decryptWithKey(legacyKey(), iv, ciphertext) }
+            .getOrThrow()
         val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "attachment" }
         val directory = File(context.cacheDir, "shared_attachments").apply { mkdirs() }
         val target = File(directory, "shared-attachment-$safeName")
@@ -75,10 +75,22 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
             init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setRandomizedEncryptionRequired(true)
+                .setRandomizedEncryptionRequired(false)
                 .build())
         }.generateKey()
     }
+
+    private fun legacyKey(): SecretKey {
+        val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        return store.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
+            ?: error("Legacy attachment key is unavailable")
+    }
+
+    private fun decryptWithKey(key: SecretKey, iv: ByteArray, ciphertext: ByteArray): ByteArray =
+        Cipher.getInstance(TRANSFORMATION).run {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            doFinal(ciphertext)
+        }
 
     private fun displayName(resolver: ContentResolver, uri: Uri): String? = runCatching {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor: Cursor ->
@@ -112,7 +124,8 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
     companion object {
         const val MAX_ATTACHMENT_BYTES = 512 * 1024
         const val IV_BYTES = 12
-        const val KEY_ALIAS = "CiphrChatAttachmentKey"
+        const val KEY_ALIAS = "CiphrChatAttachmentKeyV2"
+        const val LEGACY_KEY_ALIAS = "CiphrChatAttachmentKey"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }

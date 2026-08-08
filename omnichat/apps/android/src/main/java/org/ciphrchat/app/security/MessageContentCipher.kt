@@ -33,25 +33,41 @@ class MessageContentCipher @Inject constructor() {
         require(ivSize in 12..16) { "Invalid encrypted message" }
         val iv = ByteArray(ivSize).also { buffer.get(it) }
         val ciphertext = ByteArray(buffer.remaining()).also { buffer.get(it) }
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        return cipher.doFinal(ciphertext).toString(Charsets.UTF_8)
+        return runCatching { decryptWithKey(key(), iv, ciphertext) }
+            .recoverCatching { decryptWithKey(legacyKey(), iv, ciphertext) }
+            .getOrThrow()
     }
 
     private fun key(): SecretKey {
         val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
         if (existing != null) return existing
+        return generateKey(KEY_ALIAS)
+    }
+
+    private fun legacyKey(): SecretKey {
+        return keyStore.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
+            ?: error("Legacy message content key is unavailable")
+    }
+
+    private fun generateKey(alias: String): SecretKey {
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+        generator.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setRandomizedEncryptionRequired(true)
+            .setRandomizedEncryptionRequired(false)
             .build())
         return generator.generateKey()
     }
 
+    private fun decryptWithKey(key: SecretKey, iv: ByteArray, ciphertext: ByteArray): String {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        return cipher.doFinal(ciphertext).toString(Charsets.UTF_8)
+    }
+
     private companion object {
-        const val KEY_ALIAS = "CiphrChatMessageContentKey"
+        const val KEY_ALIAS = "CiphrChatMessageContentKeyV2"
+        const val LEGACY_KEY_ALIAS = "CiphrChatMessageContentKey"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
