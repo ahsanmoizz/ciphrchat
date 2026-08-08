@@ -19,16 +19,16 @@ audio, NFC, and mesh routes are deliberately rejected for oversized payloads.
 | Bluetooth mesh | Bounded flood forwarding with hop limits and duplicate suppression. | Offline multi-hop small messages |
 | Nearby audio | FSK carrier with synchronization, CRC, Reed–Solomon correction, and microphone demodulation. | Short encrypted messages; broadcast and slower than radio |
 | NFC | Reader Mode plus Host Card Emulation APDU transfer when phones are tapped together. | Explicit tap-based store-and-forward messages |
-| UWB | Proximity/ranging assist only. Android's UWB APIs expose ranging sessions, not an arbitrary application payload channel. | Presence/proximity verification; message bytes use BLE/Wi-Fi/Internet |
-| Infrared | ConsumerIrManager transmitter detection only. Stock Android does not expose a general IR receiver API for phone-to-phone data. | Capability is reported accurately; it is not an automatic message route |
+| UWB | Secure UWB ranging session negotiated over BLE GATT; the verified proximity gate then authorizes the same authenticated BLE envelope path. | Nearby delivery on compatible UWB devices; UWB itself carries ranging, not message bytes |
+| Infrared | ConsumerIrManager transmitter plus CameraX optical receiver using framed, CRC-checked OOK symbols. | Small nearby messages when both phones have an IR emitter, camera permission, and line of sight |
 
 ## Routing rules
 
 Automatic routing uses only transports that can actually deliver an envelope.
-UWB and infrared are deliberately excluded from the message route because
-Android does not provide the required bidirectional payload channel. NFC is an
-explicit tap transfer and must not block ordinary Internet delivery while it
-waits for a physical tap.
+UWB is included only after a ranging session verifies the peer; BLE carries the
+encrypted message bytes. Infrared is included only when the camera receiver is
+attached and the device exposes an IR emitter. NFC is an explicit tap transfer
+and must not block ordinary Internet delivery while it waits for a physical tap.
 
 The relay address is a libp2p endpoint, not an HTTPS URL. Libp2p's secure
 session protects the message transport; HTTPS is appropriate for a health or

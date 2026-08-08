@@ -17,6 +17,7 @@ class AutomaticRouter @Inject constructor(
         TransportKind.ULTRASOUND,
         TransportKind.INFRARED,
         TransportKind.NFC_PAIRING,
+        TransportKind.UWB_ASSIST,
         TransportKind.INTERNET_RELAY
     )
 
