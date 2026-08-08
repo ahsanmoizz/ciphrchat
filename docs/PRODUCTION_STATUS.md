@@ -9,7 +9,7 @@ This is the release truth for the repository. Green CI proves that checked-in co
 - Recovery export/import is a password-protected AES-GCM snapshot containing identity, Signal state, contacts, messages, and sessions.
 - Internet messaging code uses the Rust/libp2p request-response client and a persistent-key circuit relay service; a live relay and two-device delivery are not yet verified.
 - LAN, Wi-Fi Direct, and Bluetooth GATT code uses bounded framed envelopes and feeds received frames into the message repository; Signal decryption still happens at the application endpoint. Hardware interoperability is not yet verified.
-- Wi-Fi Aware, Bluetooth mesh, nearby audio, and NFC now have checked-in authenticated data paths. NFC is an explicit tap transfer and nearby audio is bounded to short messages. UWB is implemented as a proximity/ranging capability because Android exposes no arbitrary UWB application-payload channel; stock Android IR is transmitter-only and is not advertised as a message route. Hardware interoperability remains a required release test.
+- Wi-Fi Aware, Bluetooth mesh, nearby audio, and NFC have checked-in authenticated data paths. UWB now negotiates a secure ranging session over BLE and authorizes BLE delivery only after proximity verification; infrared uses ConsumerIrManager transmission plus a CameraX optical receiver when the device exposes both capabilities. NFC and optical routes are explicit/device-dependent, and hardware interoperability remains a required release test.
 
 ## Required before calling a public release production-ready
 
