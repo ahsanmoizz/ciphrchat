@@ -56,6 +56,7 @@ fun EnableConnectionsScreen(
                 add(Manifest.permission.ACCESS_FINE_LOCATION)
                 add(Manifest.permission.ACCESS_COARSE_LOCATION)
             }
+            add(Manifest.permission.RECORD_AUDIO)
         }.toTypedArray()
     }
     Column(
@@ -98,7 +99,7 @@ fun EnableConnectionsScreen(
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.WifiTethering, "Wi-Fi Aware", "Compatible devices", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Not a secure message route", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Microphone permission", CiphrWarning)
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.Nfc, "NFC", "Pairing only", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
