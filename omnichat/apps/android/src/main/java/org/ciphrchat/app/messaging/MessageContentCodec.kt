@@ -1,7 +1,9 @@
 package org.ciphrchat.app.messaging
 
-import org.json.JSONObject
-import java.util.Base64
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
 
 /**
  * Versioned plaintext content format. The complete result is encrypted by
@@ -9,7 +11,11 @@ import java.util.Base64
  * never exposed to relays or nearby adapters.
  */
 object MessageContentCodec {
-    private const val VERSION = 1
+    private val MAGIC = "CIPHR_CONTENT_1".toByteArray(Charsets.US_ASCII)
+    private const val TEXT = 1
+    private const val ATTACHMENT = 2
+    private const val MAX_FIELD_BYTES = 4 * 1024
+    private const val MAX_ATTACHMENT_BYTES = 512 * 1024
 
     data class Decoded(
         val text: String? = null,
@@ -22,37 +28,59 @@ object MessageContentCodec {
         val bytes: ByteArray
     )
 
-    fun encodeText(text: String): ByteArray = JSONObject()
-        .put("version", VERSION)
-        .put("kind", "text")
-        .put("text", text)
-        .toString()
-        .toByteArray(Charsets.UTF_8)
+    fun encodeText(text: String): ByteArray = ByteArrayOutputStream().use { bytes ->
+        DataOutputStream(bytes).use { output ->
+            output.write(MAGIC)
+            output.writeByte(TEXT)
+            writeField(output, text.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+        }
+        bytes.toByteArray()
+    }
 
-    fun encodeAttachment(fileName: String, mimeType: String, bytes: ByteArray): ByteArray = JSONObject()
-        .put("version", VERSION)
-        .put("kind", "attachment")
-        .put("fileName", fileName)
-        .put("mimeType", mimeType)
-        .put("data", Base64.getEncoder().encodeToString(bytes))
-        .toString()
-        .toByteArray(Charsets.UTF_8)
+    fun encodeAttachment(fileName: String, mimeType: String, bytes: ByteArray): ByteArray = ByteArrayOutputStream().use { encoded ->
+        DataOutputStream(encoded).use { output ->
+            output.write(MAGIC)
+            output.writeByte(ATTACHMENT)
+            writeField(output, fileName.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, mimeType.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, bytes, MAX_ATTACHMENT_BYTES)
+        }
+        encoded.toByteArray()
+    }
 
     fun decode(bytes: ByteArray): Decoded {
-        val raw = bytes.toString(Charsets.UTF_8)
-        val json = runCatching { JSONObject(raw) }.getOrNull()
-            ?: return Decoded(text = raw)
-        if (json.optInt("version", 0) != VERSION) return Decoded(text = raw)
-        return when (json.optString("kind")) {
-            "text" -> Decoded(text = json.optString("text"))
-            "attachment" -> {
-                val fileName = json.optString("fileName").ifBlank { "attachment" }
-                val mimeType = json.optString("mimeType").ifBlank { "application/octet-stream" }
-                val data = runCatching { Base64.getDecoder().decode(json.getString("data")) }.getOrNull()
-                    ?: throw IllegalArgumentException("Attachment data is invalid")
-                Decoded(attachment = Attachment(fileName, mimeType, data))
+        if (!bytes.startsWith(MAGIC)) return Decoded(text = bytes.toString(Charsets.UTF_8))
+        return runCatching {
+            DataInputStream(ByteArrayInputStream(bytes, MAGIC.size, bytes.size - MAGIC.size)).use { input ->
+                when (input.readUnsignedByte()) {
+                    TEXT -> Decoded(text = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8))
+                    ATTACHMENT -> Decoded(
+                        attachment = Attachment(
+                            readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8),
+                            readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8),
+                            readField(input, MAX_ATTACHMENT_BYTES)
+                        )
+                    )
+                    else -> throw IllegalArgumentException("Unsupported CiphrChat content kind")
+                }
             }
-            else -> Decoded(text = raw)
-        }
+        }.getOrElse { throw IllegalArgumentException("Invalid CiphrChat message content", it) }
+    }
+
+    private fun writeField(output: DataOutputStream, bytes: ByteArray, max: Int) {
+        require(bytes.size <= max) { "Content field is too large" }
+        output.writeInt(bytes.size)
+        output.write(bytes)
+    }
+
+    private fun readField(input: DataInputStream, max: Int): ByteArray {
+        val size = input.readInt()
+        require(size in 0..max) { "Invalid CiphrChat content field" }
+        return ByteArray(size).also(input::readFully)
+    }
+
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean {
+        if (size < prefix.size) return false
+        return prefix.indices.all { this[it] == prefix[it] }
     }
 }
