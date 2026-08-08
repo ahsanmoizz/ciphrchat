@@ -6,9 +6,9 @@ This audit records what is proven by the repository and what still requires live
 
 ## Automated evidence
 
-- Final code commit: [`151637a`](https://github.com/ahsanmoizz/ciphrchat/commit/151637a843b7cdefe8bab04b7c266cf544af90e9)
-- Android build, lint, unit tests, APK artifact, and latest APK publication: [workflow run 31217865760](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865760)
-- Rust formatting, clippy, workspace tests, relay tests, and relay container build: [workflow run 31217865917](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865917)
+- Latest transport implementation commit: [`1dc785e`](https://github.com/ahsanmoizz/ciphrchat/commit/1dc785e)
+- Android build, lint, unit tests, APK artifact, and latest APK publication are run by [`Android CI`](https://github.com/ahsanmoizz/ciphrchat/actions/workflows/android.yml); the latest transport commits must be green before installing a new APK.
+- Rust formatting, clippy, workspace tests, relay tests, and relay container build are run by [`Rust CI`](https://github.com/ahsanmoizz/ciphrchat/actions/workflows/rust.yml).
 
 ## Requirement matrix
 
@@ -20,7 +20,7 @@ This audit records what is proven by the repository and what still requires live
 | Queue/retry/delivery states | Persistent message status model and retry worker; native delivery IDs are wired back to the message row | Automated/static evidence; offline/reconnect/duplicate test still needed |
 | Internet P2P with relay | Rust/libp2p client and persistent-key relay service, Docker/VPS deployment workflow | Code/CI verified; live VPS and cross-network delivery not verified |
 | LAN/Wi-Fi Direct/Bluetooth GATT framing | Bounded authenticated-envelope framing and inbound bus wiring; GATT frame length cap | Code/CI verified; hardware interoperability not verified |
-| Experimental media truthfulness | Ultrasound, IR, NFC, UWB, Wi-Fi Aware messaging, and Bluetooth mesh reject/advertise unavailable instead of claiming delivery | Verified as disabled/experimental |
+| Transport implementation truthfulness | Wi-Fi Aware, Bluetooth mesh, nearby audio, and NFC have authenticated paths; UWB is proximity assist; IR is transmitter-only on stock Android | Code evidence; hardware interoperability still needed |
 | Release hardening | Actions pinned to immutable SHAs; signed-release workflow fails closed without keystore secrets and runs `apksigner`/checksum verification | Workflow verified; signed release not executed |
 | VPS deployment | Manual deployment workflow and [`DEPLOYMENT.md`](DEPLOYMENT.md) | Not verified until a real VPS run succeeds |
 | Independent security review | No review artifact is present | Missing |

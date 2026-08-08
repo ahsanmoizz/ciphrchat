@@ -27,7 +27,7 @@ object PermissionSets {
     val microphone = PermissionGroup(
         name = "Microphone (Ultrasound)",
         permissions = listOf("android.permission.RECORD_AUDIO"),
-        rationale = "Microphone access enables experimental ultrasound data transfer."
+        rationale = "Microphone access enables secure short-message transfer over nearby audio."
     )
 
     val notifications = PermissionGroup(

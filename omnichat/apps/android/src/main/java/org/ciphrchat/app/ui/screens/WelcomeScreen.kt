@@ -61,7 +61,6 @@ fun WelcomeScreen(
         ) {
             Spacer(Modifier.weight(1f))
 
-            // Logo placeholder — will use actual logo asset
             Image(
                 painter = painterResource(R.drawable.ciphrchatlogo),
                 contentDescription = "CiphrChat logo",
