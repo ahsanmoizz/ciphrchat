@@ -7,9 +7,13 @@ import androidx.activity.enableEdgeToEdge
 import dagger.hilt.android.AndroidEntryPoint
 import org.ciphrchat.app.app.CiphrChatApp
 import org.ciphrchat.app.ui.theme.CiphrChatTheme
+import org.ciphrchat.app.transport.nfc.NfcTransportCoordinator
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject lateinit var nfcCoordinator: NfcTransportCoordinator
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -18,5 +22,15 @@ class MainActivity : ComponentActivity() {
                 CiphrChatApp()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        nfcCoordinator.attach(this)
+    }
+
+    override fun onPause() {
+        nfcCoordinator.detach(this)
+        super.onPause()
     }
 }

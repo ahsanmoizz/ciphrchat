@@ -1,18 +1,19 @@
 package org.ciphrchat.app.transport.adapters
 
 import android.content.Context
-import android.nfc.NfcAdapter
 import android.nfc.NfcManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.ciphrchat.app.transport.*
+import org.ciphrchat.app.transport.nfc.NfcTransportCoordinator
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class NfcTransportAdapter @Inject constructor(
-    private val context: Context
+    private val context: Context,
+    private val coordinator: NfcTransportCoordinator
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.NFC_PAIRING
     override val capabilities: Set<TransportCapability> = setOf(
@@ -22,7 +23,7 @@ class NfcTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.EXPERIMENTAL, "NFC is reserved for explicit pairing")
+        TransportState(kind, TransportAvailability.STARTING, "NFC tap transfer is not started")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -41,7 +42,7 @@ class NfcTransportAdapter @Inject constructor(
         }
 
         // In full implementation, we'd enable Reader Mode or Host Card Emulation
-        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "NFC detected; explicit pairing flow is not a message route")
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Tap another CiphrChat phone to transfer encrypted messages")
         return Result.success(Unit)
     }
 
@@ -56,11 +57,10 @@ class NfcTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.Unreachable("NFC is reserved for explicit pairing")
+        return Reachability.Reachable
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        // Envelopes are staged for transmission on next tap
-        return SendResult.Failure(Exception("NFC sends require physical tap event"))
+        return coordinator.send(envelope)
     }
 }

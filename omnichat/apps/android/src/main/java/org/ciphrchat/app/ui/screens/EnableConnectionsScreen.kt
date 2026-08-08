@@ -101,7 +101,7 @@ fun EnableConnectionsScreen(
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Microphone permission", CiphrWarning)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Nfc, "NFC", "Pairing only", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.Nfc, "NFC", "Tap phones to transfer", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity assist only", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
