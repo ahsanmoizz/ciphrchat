@@ -4,7 +4,7 @@
     android:requireDeviceUnlock="false">
     <aid-group
         android:category="other"
-        android:description="CiphrChat secure transfer">
+        android:description="@string/app_name">
         <aid-filter android:name="F0010203040506" />
     </aid-group>
 </host-apdu-service>

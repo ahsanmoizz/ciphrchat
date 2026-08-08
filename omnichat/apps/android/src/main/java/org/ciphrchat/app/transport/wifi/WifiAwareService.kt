@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -124,9 +125,8 @@ class WifiAwareService @Inject constructor(
                 }
             }
 
-            override fun onServiceLost(peerHandle: PeerHandle, serviceSpecificInfo: ByteArray) {
-                val publicId = serviceSpecificInfo.toString(Charsets.UTF_8)
-                discoveredHandles.remove(publicId)
+            override fun onServiceLost(peerHandle: PeerHandle, reason: Int) {
+                discoveredHandles.entries.removeAll { it.value == peerHandle }
                 _discoveredPeers.value = discoveredHandles.keys.map { id ->
                     DiscoveredPeer(id, "Aware Peer", TransportKind.WIFI_AWARE, 80, System.currentTimeMillis())
                 }
