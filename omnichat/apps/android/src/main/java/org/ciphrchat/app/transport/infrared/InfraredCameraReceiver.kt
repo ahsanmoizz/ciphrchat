@@ -39,7 +39,7 @@ class InfraredCameraReceiver @Inject constructor(private val context: Context) {
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
                 next.setAnalyzer(executor) { image -> analyze(image) }
-                analysis?.let(cameraProvider::unbind)
+                analysis?.let { cameraProvider.unbind(it) }
                 cameraProvider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, next)
                 analysis = next
             }
