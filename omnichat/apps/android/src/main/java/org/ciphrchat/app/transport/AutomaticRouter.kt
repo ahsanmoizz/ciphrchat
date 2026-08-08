@@ -24,6 +24,12 @@ class AutomaticRouter @Inject constructor(
         val failures = mutableListOf<String>()
 
         for (adapter in adapters) {
+            if (envelope.encryptedPayload.size > LARGE_PAYLOAD_THRESHOLD &&
+                !adapter.capabilities.contains(TransportCapability.LARGE_PAYLOAD)
+            ) {
+                failures += "${adapter.kind}: payload is too large for this transport"
+                continue
+            }
             when (adapter.canReach(envelope.recipientId)) {
                 Reachability.Reachable, Reachability.DIRECT, Reachability.MESH_PATH -> {
                     when (val result = adapter.send(envelope)) {
@@ -42,5 +48,9 @@ class AutomaticRouter @Inject constructor(
         return SendResult.Rejected(
             failures.joinToString(separator = "; ").ifBlank { "No transport available" }
         )
+    }
+
+    private companion object {
+        const val LARGE_PAYLOAD_THRESHOLD = 32 * 1024
     }
 }

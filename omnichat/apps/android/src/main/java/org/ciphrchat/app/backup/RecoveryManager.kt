@@ -195,11 +195,19 @@ private fun MessageEntity.toJson() = JSONObject()
     .put("id", id).put("conversationId", conversationId).put("senderId", senderId).put("recipientId", recipientId)
     .put("body", body).put("encryptedPayload", encryptedPayload.encode()).put("createdAtEpochMs", createdAtEpochMs)
     .put("direction", direction.name).put("status", status.name).put("selectedTransport", selectedTransport)
+    .put("attachmentFileName", attachmentFileName).put("attachmentMimeType", attachmentMimeType)
+    .put("attachmentStoragePath", attachmentStoragePath).put("attachmentSizeBytes", attachmentSizeBytes)
+    .put("attachmentSha256", attachmentSha256)
 private fun JSONObject.toMessage() = MessageEntity(
     getString("id"), getString("conversationId"), getString("senderId"), getString("recipientId"), getString("body"),
     getString("encryptedPayload").decodeBytes(), getLong("createdAtEpochMs"),
     MessageDirection.valueOf(getString("direction")), MessageStatus.valueOf(getString("status")),
-    optString("selectedTransport").takeUnless { it == "" || it == "null" }
+    optString("selectedTransport").takeUnless { it == "" || it == "null" },
+    optString("attachmentFileName").takeUnless { it.isBlank() || it == "null" },
+    optString("attachmentMimeType").takeUnless { it.isBlank() || it == "null" },
+    optString("attachmentStoragePath").takeUnless { it.isBlank() || it == "null" },
+    optLong("attachmentSizeBytes", 0L),
+    optString("attachmentSha256").takeUnless { it.isBlank() || it == "null" }
 )
 
 private fun SignalIdentityEntity.toJson() = JSONObject().put("addressName", addressName).put("identityKey", identityKey.encode())

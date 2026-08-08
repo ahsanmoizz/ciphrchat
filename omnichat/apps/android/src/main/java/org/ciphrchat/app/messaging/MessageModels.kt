@@ -12,7 +12,11 @@ data class ChatMessage(
     val createdAtEpochMs: Long,
     val direction: MessageDirection,
     val status: MessageStatus,
-    val selectedTransport: String? = null
+    val selectedTransport: String? = null,
+    val attachmentFileName: String? = null,
+    val attachmentMimeType: String? = null,
+    val attachmentStoragePath: String? = null,
+    val attachmentSizeBytes: Long = 0L
 )
 
 data class ConversationSummary(

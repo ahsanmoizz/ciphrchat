@@ -10,6 +10,7 @@ import android.util.Base64
 import org.json.JSONObject
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
+import android.net.Uri
 import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.MessageEntity
@@ -37,7 +38,8 @@ class PersistentMessageRepository @Inject constructor(
     private val contentCipher: MessageContentCipher,
     private val p2p: RustP2pManager,
     private val inboundBus: TransportInboundBus,
-    private val identity: IdentityRepository
+    private val identity: IdentityRepository,
+    private val attachmentStore: AttachmentStore
 ) : MessageRepository {
 
     private val dao = database.messageDao()
@@ -94,18 +96,73 @@ class PersistentMessageRepository @Inject constructor(
             sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
         }
         val trimmed = text.trim()
-        val ciphertext = sessions.encryptMessage(address, trimmed.toByteArray(Charsets.UTF_8))
+        sendContent(
+            conversationId = conversationId,
+            recipientId = recipientId,
+            address = address,
+            plaintext = MessageContentCodec.encodeText(trimmed),
+            body = trimmed
+        )
+    }
+
+    override suspend fun sendAttachment(
+        conversationId: String,
+        recipientId: String,
+        uri: Uri
+    ): Result<ChatMessage> = runCatching {
+        val input = attachmentStore.read(uri)
+        require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
+        val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
+        val contact = contacts.find(recipientId)
+            ?: error("Contact is not paired: scan or enter their invitation first")
+        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+        if (!sessions.hasSession(address)) {
+            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+        }
+        sendContent(
+            conversationId = conversationId,
+            recipientId = recipientId,
+            address = address,
+            plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
+            body = "Attachment: ${input.fileName}",
+            attachmentFileName = input.fileName,
+            attachmentMimeType = input.mimeType,
+            attachmentStoragePath = stored.path,
+            attachmentSizeBytes = stored.size,
+            attachmentSha256 = stored.sha256
+        )
+    }
+
+    private suspend fun sendContent(
+        conversationId: String,
+        recipientId: String,
+        address: SignalProtocolAddress,
+        plaintext: ByteArray,
+        body: String,
+        attachmentFileName: String? = null,
+        attachmentMimeType: String? = null,
+        attachmentStoragePath: String? = null,
+        attachmentSizeBytes: Long = 0L,
+        attachmentSha256: String? = null
+    ): ChatMessage {
+        val ciphertext = sessions.encryptMessage(address, plaintext)
+        val localIdentity = identity.current()?.publicId ?: error("Local identity is unavailable")
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
             conversationId = conversationId,
-            senderId = identity.current()?.publicId ?: error("Local identity is unavailable"),
+            senderId = localIdentity,
             recipientId = recipientId,
-            body = contentCipher.encrypt(trimmed),
+            body = contentCipher.encrypt(body),
             encryptedPayload = ciphertext.serialize(),
             createdAtEpochMs = System.currentTimeMillis(),
             direction = MessageDirection.OUTGOING,
             status = MessageStatus.QUEUED,
-            selectedTransport = null
+            selectedTransport = null,
+            attachmentFileName = attachmentFileName,
+            attachmentMimeType = attachmentMimeType,
+            attachmentStoragePath = attachmentStoragePath,
+            attachmentSizeBytes = attachmentSizeBytes,
+            attachmentSha256 = attachmentSha256
         )
         dao.insertMessage(entity)
 
@@ -113,7 +170,7 @@ class PersistentMessageRepository @Inject constructor(
             protocolVersion = 1,
             messageId = entity.id,
             recipientId = recipientId,
-            senderId = identity.current()?.publicId ?: error("Local identity is unavailable"),
+            senderId = localIdentity,
             createdAtEpochMs = entity.createdAtEpochMs,
             expiresAtEpochMs = entity.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
             hopLimit = 3,
@@ -128,7 +185,7 @@ class PersistentMessageRepository @Inject constructor(
             SendResult.Success -> entity.copy(status = MessageStatus.QUEUED)
         }
         dao.updateMessage(finalEntity)
-        finalEntity.toModel()
+        return finalEntity.toModel()
     }
 
     private fun MessageEntity.toModel() = ChatMessage(
@@ -140,7 +197,11 @@ class PersistentMessageRepository @Inject constructor(
         createdAtEpochMs = createdAtEpochMs,
         direction = direction,
         status = status,
-        selectedTransport = selectedTransport
+        selectedTransport = selectedTransport,
+        attachmentFileName = attachmentFileName,
+        attachmentMimeType = attachmentMimeType,
+        attachmentStoragePath = attachmentStoragePath,
+        attachmentSizeBytes = attachmentSizeBytes
     )
 
     private fun decryptBody(entity: MessageEntity): String = runCatching {
@@ -167,20 +228,7 @@ class PersistentMessageRepository @Inject constructor(
             require(ciphertext.isNotEmpty() && ciphertext.size <= 1_048_576) { "Invalid encrypted payload" }
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
-            dao.insertMessage(
-                MessageEntity(
-                    id = messageId,
-                    conversationId = contact.contactId,
-                    senderId = contact.contactId,
-                    recipientId = "local",
-                    body = contentCipher.encrypt(plaintext.toString(Charsets.UTF_8)),
-                    encryptedPayload = ciphertext,
-                    createdAtEpochMs = createdAt,
-                    direction = MessageDirection.INCOMING,
-                    status = MessageStatus.DELIVERED,
-                    selectedTransport = "INTERNET_DIRECT"
-                )
-            )
+            persistIncoming(messageId, contact.contactId, ciphertext, plaintext, createdAt, "INTERNET_DIRECT")
         }
     }
 
@@ -192,21 +240,44 @@ class PersistentMessageRepository @Inject constructor(
         runCatching {
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             val plaintext = sessions.decryptSerializedMessage(address, envelope.encryptedPayload)
-            dao.insertMessage(
-                MessageEntity(
-                    id = envelope.messageId,
-                    conversationId = contact.contactId,
-                    senderId = contact.contactId,
-                    recipientId = identity.current()?.publicId ?: "local",
-                    body = contentCipher.encrypt(plaintext.toString(Charsets.UTF_8)),
-                    encryptedPayload = envelope.encryptedPayload,
-                    createdAtEpochMs = envelope.createdAtEpochMs,
-                    direction = MessageDirection.INCOMING,
-                    status = MessageStatus.DELIVERED,
-                    selectedTransport = "LOCAL"
-                )
-            )
+            persistIncoming(envelope.messageId, contact.contactId, envelope.encryptedPayload, plaintext, envelope.createdAtEpochMs, "LOCAL")
         }
+    }
+
+    private suspend fun persistIncoming(
+        messageId: String,
+        senderId: String,
+        ciphertext: ByteArray,
+        plaintext: ByteArray,
+        createdAtEpochMs: Long,
+        transport: String
+    ) {
+        val decoded = MessageContentCodec.decode(plaintext)
+        val attachment = decoded.attachment
+        val stored = attachment?.let {
+            require(it.bytes.size <= AttachmentStore.MAX_ATTACHMENT_BYTES) { "Attachment exceeds the supported size" }
+            attachmentStore.save(it.fileName, it.mimeType, it.bytes)
+        }
+        val localId = identity.current()?.publicId ?: "local"
+        dao.insertMessage(
+            MessageEntity(
+                id = messageId,
+                conversationId = senderId,
+                senderId = senderId,
+                recipientId = localId,
+                body = contentCipher.encrypt(decoded.text ?: "Attachment: ${attachment?.fileName ?: "file"}"),
+                encryptedPayload = ciphertext,
+                createdAtEpochMs = createdAtEpochMs,
+                direction = MessageDirection.INCOMING,
+                status = MessageStatus.DELIVERED,
+                selectedTransport = transport,
+                attachmentFileName = attachment?.fileName,
+                attachmentMimeType = attachment?.mimeType,
+                attachmentStoragePath = stored?.path,
+                attachmentSizeBytes = stored?.size ?: 0L,
+                attachmentSha256 = stored?.sha256
+            )
+        )
     }
 
     private suspend fun updateDelivery(messageId: String, status: MessageStatus) {

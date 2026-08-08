@@ -8,11 +8,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import org.ciphrchat.app.messaging.ChatViewModel
@@ -21,6 +23,10 @@ import org.ciphrchat.app.ui.components.CiphrMessageBubble
 import org.ciphrchat.app.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import android.content.Intent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,9 +37,14 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val resolvedContactName by viewModel.contactName.collectAsState()
+    val notice by viewModel.notice.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val currentLocale = LocalConfiguration.current.locales[0]
+    val context = LocalContext.current
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::sendAttachment)
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -63,6 +74,9 @@ fun ChatScreen(
                     .padding(horizontal = 12.dp, vertical = 8.dp).navigationBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(onClick = { attachmentPicker.launch(arrayOf("*/*")) }) {
+                    Icon(Icons.Default.AttachFile, "Attach file", tint = CiphrTextSecondary)
+                }
                 OutlinedTextField(
                     value = inputText, onValueChange = { inputText = it },
                     placeholder = { Text("Message") }, shape = CiphrPillShape,
@@ -81,12 +95,33 @@ fun ChatScreen(
             state = listState, verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
+            notice?.let { message ->
+                item {
+                    Text(message, color = CiphrDanger, style = MaterialTheme.typography.bodySmall)
+                }
+            }
             items(messages, key = { it.id }) { message ->
                 CiphrMessageBubble(
                     text = message.body,
                     time = SimpleDateFormat("HH:mm", currentLocale).format(Date(message.createdAtEpochMs)),
                     isOutgoing = message.direction == MessageDirection.OUTGOING,
-                    statusLabel = if (message.direction == MessageDirection.OUTGOING) message.status.name.lowercase() else null
+                    statusLabel = if (message.direction == MessageDirection.OUTGOING) message.status.name.lowercase() else null,
+                    attachmentFileName = message.attachmentFileName,
+                    attachmentMimeType = message.attachmentMimeType,
+                    attachmentSizeBytes = message.attachmentSizeBytes,
+                    onOpenAttachment = if (message.attachmentStoragePath != null) {
+                        {
+                            viewModel.materializeAttachment(message) { result ->
+                                result.onSuccess { file ->
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                                    context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, message.attachmentMimeType ?: "application/octet-stream")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    })
+                                }.onFailure { }
+                            }
+                        }
+                    } else null
                 )
             }
         }

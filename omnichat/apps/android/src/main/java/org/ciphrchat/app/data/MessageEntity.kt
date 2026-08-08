@@ -23,7 +23,12 @@ data class MessageEntity(
     val createdAtEpochMs: Long,
     val direction: MessageDirection,
     val status: MessageStatus,
-    val selectedTransport: String?
+    val selectedTransport: String?,
+    val attachmentFileName: String? = null,
+    val attachmentMimeType: String? = null,
+    val attachmentStoragePath: String? = null,
+    val attachmentSizeBytes: Long = 0L,
+    val attachmentSha256: String? = null
 )
 
 @Dao

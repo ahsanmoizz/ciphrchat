@@ -4,6 +4,12 @@ CiphrChat uses one authenticated envelope for every connection. The message
 payload remains end-to-end encrypted; a transport only carries the envelope
 and never decides whether a message belongs to a device.
 
+Attachments are selected with Android's document picker, retain their MIME
+type and filename, are encrypted inside the Signal session, and are encrypted
+again in the app's private local attachment store. The current per-attachment
+limit is 512 KiB. Large-payload routes can carry these attachments; short-range
+audio, NFC, and mesh routes are deliberately rejected for oversized payloads.
+
 | Connection | Production behavior | Scope |
 | --- | --- | --- |
 | Internet direct / relay | Sends and receives normal messages through the VPS relay when a direct path is unavailable. | Full message sizes supported by the wire limits |
