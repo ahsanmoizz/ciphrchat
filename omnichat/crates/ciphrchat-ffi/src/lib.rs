@@ -1,5 +1,5 @@
 use jni::{
-    objects::{JByteArray, JClass, JObject, JString, JValue},
+    objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue},
     sys::jboolean,
     JNIEnv, JavaVM,
 };
@@ -20,6 +20,9 @@ use libp2p::{identity, Multiaddr, PeerId};
 static COMMANDS: OnceLock<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>> = OnceLock::new();
 static JVM: OnceLock<JavaVM> = OnceLock::new();
 static LOCAL_PEER_ID: OnceLock<String> = OnceLock::new();
+static CALLBACK_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
+const CALLBACK_CLASS_NAME: &str = "org/ciphrchat/app/transport/internet/RustP2pManager";
 
 fn command_sender() -> Option<mpsc::UnboundedSender<SwarmCommand>> {
     COMMANDS
@@ -68,11 +71,18 @@ fn jstring(env: &mut JNIEnv<'_>, value: JString<'_>) -> Result<String, String> {
 }
 
 fn call_callback(env: &mut JNIEnv<'_>, name: &str, signature: &str, args: &[JValue<'_, '_>]) {
-    let class_name = "org/ciphrchat/app/transport/internet/RustP2pManager";
-    if let Ok(class) = env.find_class(class_name) {
-        if let Err(error) = env.call_static_method(class, name, signature, args) {
-            eprintln!("CiphrChat JNI callback {name} failed: {error}");
-        }
+    let Some(callback_class) = CALLBACK_CLASS.get() else {
+        eprintln!("CiphrChat JNI callback {name} skipped: callback class is unavailable");
+        return;
+    };
+
+    // FindClass is not safe on a thread created by Rust: Android resolves it
+    // through the system class loader instead of the app class loader. The
+    // class is cached as a GlobalRef by nativeStartSwarm on the Java thread,
+    // then reused by every native callback thread.
+    let class = unsafe { JClass::from_raw(callback_class.as_obj().as_raw()) };
+    if let Err(error) = env.call_static_method(class, name, signature, args) {
+        eprintln!("CiphrChat JNI callback {name} failed: {error}");
     }
 }
 
@@ -220,6 +230,19 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
     let local_peer_id = PeerId::from(local_key.public());
     let _ = LOCAL_PEER_ID.set(local_peer_id.to_string());
     let _ = JVM.set(env.get_java_vm().expect("JNI VM must be available"));
+
+    let callback_class = match env
+        .find_class(CALLBACK_CLASS_NAME)
+        .and_then(|class| env.new_global_ref(class))
+    {
+        Ok(class) => class,
+        Err(error) => {
+            let _ = env.exception_clear();
+            eprintln!("CiphrChat cannot cache JNI callback class: {error}");
+            return 0;
+        }
+    };
+    let _ = CALLBACK_CLASS.set(callback_class);
 
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
