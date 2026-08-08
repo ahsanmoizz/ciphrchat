@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -24,7 +25,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.MultiFormatReader
-import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import org.ciphrchat.app.ui.components.CiphrPrimaryButton
@@ -32,6 +32,7 @@ import org.ciphrchat.app.ui.components.CiphrSecondaryButton
 import org.ciphrchat.app.ui.theme.CiphrBackground
 import org.ciphrchat.app.ui.theme.CiphrText
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun ScannerScreen(
@@ -40,6 +41,7 @@ fun ScannerScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scanCompleted = remember { AtomicBoolean(false) }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -83,28 +85,17 @@ fun ScannerScreen(
 
                         val executor = Executors.newSingleThreadExecutor()
                         imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                            val buffer = imageProxy.planes[0].buffer
-                            val data = ByteArray(buffer.remaining())
-                            buffer.get(data)
-                            
-                            val source = PlanarYUVLuminanceSource(
-                                data,
-                                imageProxy.width,
-                                imageProxy.height,
-                                0, 0,
-                                imageProxy.width,
-                                imageProxy.height,
-                                false
-                            )
-                            val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
                             try {
-                                val result = MultiFormatReader().decode(binaryBitmap)
-                                val text = result.text
-                                if (text.startsWith("{")) {
-                                    onScanResult(text)
+                                if (!scanCompleted.get()) {
+                                    val text = decodeQr(imageProxy)
+                                    if (text?.trimStart()?.startsWith("{") == true &&
+                                        scanCompleted.compareAndSet(false, true)
+                                    ) {
+                                        ContextCompat.getMainExecutor(ctx).execute {
+                                            onScanResult(text)
+                                        }
+                                    }
                                 }
-                            } catch (e: NotFoundException) {
-                                // No barcode found
                             } finally {
                                 imageProxy.close()
                             }
@@ -163,4 +154,34 @@ fun ScannerScreen(
             )
         }
     }
+}
+
+private fun decodeQr(image: ImageProxy): String? {
+    val plane = image.planes.firstOrNull() ?: return null
+    val width = image.width
+    val height = image.height
+    val buffer = plane.buffer.duplicate()
+    val data = ByteArray(width * height)
+    val base = buffer.position()
+
+    // YUV_420_888 commonly has row padding. Copy only luminance pixels so
+    // ZXing receives a tightly packed image instead of a padded camera row.
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val index = base + y * plane.rowStride + x * plane.pixelStride
+            if (index >= buffer.limit()) return null
+            data[y * width + x] = buffer.get(index)
+        }
+    }
+
+    val source = PlanarYUVLuminanceSource(data, width, height, 0, 0, width, height, false)
+    val candidates = listOf(source, source.invert())
+    for (candidate in candidates) {
+        runCatching {
+            MultiFormatReader().decode(BinaryBitmap(HybridBinarizer(candidate))).text
+        }.onSuccess { text ->
+            if (text.trimStart().startsWith("{")) return text
+        }
+    }
+    return null
 }

@@ -19,10 +19,22 @@ class InvitationService @Inject constructor(
     suspend fun createInvitation(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val relay = BuildConfig.CIPHRCHAT_RELAY_ADDRESS.trim()
-            require(relay.isNotBlank()) { "This build has no public relay configured" }
             val identity = identityRepository.current() ?: error("Create your identity first")
-            p2p.startSwarm(relay).getOrThrow()
-            val peerId = p2p.localPeerId() ?: error("Native peer identity is unavailable")
+            val peerId = if (relay.isNotBlank()) {
+                runCatching {
+                    p2p.startSwarm(relay).getOrThrow()
+                    p2p.localPeerId() ?: error("Native peer identity is unavailable")
+                }.getOrElse {
+                    // Keep nearby pairing usable even if the optional native
+                    // relay client is temporarily unavailable.
+                    "local:${identity.publicId}"
+                }
+            } else {
+                // Nearby transports do not need a libp2p relay. Keep QR/NFC
+                // pairing usable for Bluetooth and local routes in a build
+                // that was not compiled with a public relay address.
+                "local:${identity.publicId}"
+            }
             InvitationCodec.encode(identity, peerId, relay, sessions.generatePreKeyBundle())
         }
     }
@@ -30,9 +42,10 @@ class InvitationService @Inject constructor(
     suspend fun importInvitation(raw: String): Result<ContactEntity> = withContext(Dispatchers.IO) {
         runCatching {
             val contact = InvitationCodec.decode(raw)
-            require(contact.relayAddress.contains("/p2p/")) { "Invitation has no authenticated relay peer" }
             contacts.save(contact)
-            p2p.connectPeer(contact.peerId, contact.relayAddress)
+            if (contact.relayAddress.isNotBlank()) {
+                p2p.connectPeer(contact.peerId, contact.relayAddress)
+            }
             contact
         }
     }

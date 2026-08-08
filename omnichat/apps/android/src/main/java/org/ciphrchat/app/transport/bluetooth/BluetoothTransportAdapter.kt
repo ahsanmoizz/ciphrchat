@@ -52,7 +52,6 @@ class BluetoothTransportAdapter @Inject constructor(
     private var started = false
 
     override suspend fun start(): Result<Unit> {
-        if (started && _state.value.availability == TransportAvailability.AVAILABLE) return Result.success(Unit)
         if (adapter == null) {
             val error = IllegalStateException("Bluetooth is not available on this device")
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
@@ -147,11 +146,14 @@ class BluetoothTransportAdapter @Inject constructor(
         
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    g.requestMtu(517)
+                if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    if (!g.requestMtu(517)) g.discoverServices()
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     g.close()
                     complete(SendResult.Failure(Exception("Disconnected before send complete")))
+                } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                    g.close()
+                    complete(SendResult.Failure(Exception("Bluetooth connection failed with status $status")))
                 }
             }
 
@@ -167,6 +169,9 @@ class BluetoothTransportAdapter @Inject constructor(
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     writeNextChunk(g)
+                } else {
+                    complete(SendResult.Failure(Exception("Bluetooth service discovery failed with status $status")))
+                    g.disconnect()
                 }
             }
 
@@ -196,8 +201,9 @@ class BluetoothTransportAdapter @Inject constructor(
 
                 // ATT carries MTU - 3 bytes. Five bytes are reserved for the
                 // first chunk's framing header and one byte for continuations.
-                val chunkSize = minOf(negotiatedMtu - 3, 500)
                 val remaining = payload.size - offset
+                val headerSize = if (offset == 0) 5 else 1
+                val chunkSize = minOf((negotiatedMtu - 3 - headerSize).coerceAtLeast(1), 500)
                 val take = minOf(chunkSize, remaining)
                 
                 val chunk = if (offset == 0) {

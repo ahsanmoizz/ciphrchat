@@ -14,7 +14,7 @@ android {
         minSdk = 26
         targetSdk = 34
         // Bump the install identity so Android refreshes the launcher icon on upgrade.
-        versionCode = 2
+        versionCode = 3
         versionName = "0.1.0-dev"
         val relayAddress = project.providers.gradleProperty("ciphrchatRelayAddress")
             .orElse(project.providers.environmentVariable("CIPHRCHAT_RELAY_ADDRESS"))

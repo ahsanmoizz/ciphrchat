@@ -46,14 +46,16 @@ object InvitationCodec {
         require(contactId == identityPublicId(identityKey)) { "Invitation identity binding is invalid" }
         require(displayName.length in 1..40) { "Invitation display name is invalid" }
         require(peerId.length in 8..200) { "Invitation peer identity is invalid" }
-        require(relayAddress.length in 16..512 && relayAddress.contains("/p2p/")) {
-            "Invitation relay address is invalid"
-        }
-        require(relayAddress.startsWith("/ip4/") || relayAddress.startsWith("/ip6/") || relayAddress.startsWith("/dns4/") || relayAddress.startsWith("/dns6/")) {
-            "Invitation relay address must use a routable host"
-        }
-        require(relayAddress.contains("/tcp/") || relayAddress.contains("/udp/")) {
-            "Invitation relay address has no transport port"
+        if (relayAddress.isNotBlank()) {
+            require(relayAddress.length in 16..512 && relayAddress.contains("/p2p/")) {
+                "Invitation relay address is invalid"
+            }
+            require(relayAddress.startsWith("/ip4/") || relayAddress.startsWith("/ip6/") || relayAddress.startsWith("/dns4/") || relayAddress.startsWith("/dns6/")) {
+                "Invitation relay address must use a routable host"
+            }
+            require(relayAddress.contains("/tcp/") || relayAddress.contains("/udp/")) {
+                "Invitation relay address has no transport port"
+            }
         }
         return ContactEntity(
             contactId = contactId,

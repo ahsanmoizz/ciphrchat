@@ -9,7 +9,7 @@ CiphrChat is an open-source Android messaging app built around a persistent loca
 
 <p>
   <a href="https://github.com/ahsanmoizz/ciphrchat/releases/download/latest/android-debug.apk">
-    <strong>Download the latest CiphrChat Android APK</strong>
+    <strong>Download and install the latest CiphrChat version</strong>
   </a>
 </p>
 
@@ -30,7 +30,7 @@ On the first launch:
 3. Continue through **Enable connections** and **Identity ready**.
 4. Tap **Start messaging** to open the app.
 
-For Internet messaging, first deploy the required relay and set the repository variable `CIPHRCHAT_RELAY_ADDRESS` to its multiaddress; follow the [deployment runbook](docs/DEPLOYMENT.md). Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer address and Signal pre-key bundle.
+For Internet messaging, first deploy the required relay and set the repository variable `CIPHRCHAT_RELAY_ADDRESS` to its multiaddress; follow the [deployment runbook](docs/DEPLOYMENT.md). Without it, the app correctly reports Internet transport as unavailable instead of pretending that messages were delivered. QR pairing remains available for nearby Bluetooth, Wi-Fi, NFC, and other local methods without a relay. Pair contacts from **Connect** by scanning or pasting their invitation; invitations contain the peer identity and Signal pre-key bundle.
 
 The implemented message routes are Internet/libp2p relay, LAN, Wi-Fi Direct, Wi-Fi Aware, Bluetooth GATT, Bluetooth mesh, nearby audio, NFC tap sessions, UWB-assisted BLE delivery, and camera/IR optical delivery on compatible phones. Chat attachments preserve their MIME type and are encrypted end-to-end before transport; the current client limit is 512 KiB per attachment, so images, short videos, audio clips, PDFs, documents, and arbitrary files can be shared through the large-payload routes. Nearby audio, NFC, mesh, infrared, and UWB-assisted delivery remain device- and proximity-dependent. Live relay delivery and hardware interoperability still require the release test matrix. See [transport capabilities](docs/TRANSPORTS.md), [production status](docs/PRODUCTION_STATUS.md), and the [production verification audit](docs/PRODUCTION_VERIFICATION.md) for release gates.
 
