@@ -20,7 +20,7 @@ class InfraredTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.EXPERIMENTAL, "IR hardware can transmit only; no authenticated receiver is available")
+        TransportState(kind, TransportAvailability.STARTING, "Infrared capability is not started")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -32,7 +32,7 @@ class InfraredTransportAdapter @Inject constructor(
             return Result.failure(Exception("IR not supported"))
         }
         
-        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "IR hardware detected; CiphrChat IR messaging is unavailable")
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "IR transmitter available; Android phones cannot receive arbitrary IR data")
         return Result.success(Unit)
     }
 
@@ -51,6 +51,6 @@ class InfraredTransportAdapter @Inject constructor(
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        return SendResult.Rejected("IR messaging requires an authenticated bidirectional receiver")
+        return SendResult.Rejected("Android exposes IR transmit only; no phone-to-phone IR receive channel is available")
     }
 }

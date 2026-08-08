@@ -103,9 +103,9 @@ fun EnableConnectionsScreen(
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.Nfc, "NFC", "Tap phones to transfer", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity assist only", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity verification", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Not a secure message route", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Transmitter only on Android", CiphrTextSecondary)
 
         permissionMessage?.let {
             Spacer(Modifier.height(12.dp))

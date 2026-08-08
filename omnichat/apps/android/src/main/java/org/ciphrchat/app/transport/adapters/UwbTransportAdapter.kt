@@ -21,7 +21,7 @@ class UwbTransportAdapter @Inject constructor(
     )
 
     private val _state = MutableStateFlow(
-        TransportState(kind, TransportAvailability.EXPERIMENTAL, "UWB ranging is not a message transport")
+        TransportState(kind, TransportAvailability.STARTING, "UWB proximity assist is not started")
     )
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
@@ -30,8 +30,13 @@ class UwbTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB requires Android 12+")
             return Result.failure(Exception("UWB not supported on OS version"))
         }
+
+        if (!context.packageManager.hasSystemFeature("android.hardware.uwb")) {
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "This device has no UWB radio")
+            return Result.failure(Exception("UWB hardware not available"))
+        }
         
-        _state.value = TransportState(kind, TransportAvailability.EXPERIMENTAL, "UWB ranging is available only as an assist; payload transport is unavailable")
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "UWB proximity assist ready; messages use authenticated nearby radios")
         return Result.success(Unit)
     }
 
@@ -50,6 +55,6 @@ class UwbTransportAdapter @Inject constructor(
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
-        return SendResult.Failure(Exception("UWB used for ranging, not full payloads yet"))
+        return SendResult.Rejected("UWB is a proximity/ranging assist; Android does not expose it as an app payload channel")
     }
 }
