@@ -50,6 +50,10 @@ class WifiAwareTransportAdapter @Inject constructor(
     private var serverSocket: ServerSocket? = null
 
     override suspend fun start(): Result<Unit> {
+        if (serverSocket?.isClosed == false) {
+            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Secure Wi-Fi Aware messaging ready")
+            return Result.success(Unit)
+        }
         if (!wifiAwareService.start()) {
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "Wi-Fi Aware is unavailable on this device")
             return Result.failure(IllegalStateException("Wi-Fi Aware unavailable"))

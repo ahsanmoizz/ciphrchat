@@ -55,6 +55,10 @@ class WifiAwareService @Inject constructor(
     }
 
     suspend fun start(): Boolean = suspendCancellableCoroutine { cont ->
+        if (awareSession != null) {
+            cont.resume(true)
+            return@suspendCancellableCoroutine
+        }
         if (awareManager == null || !awareManager.isAvailable) {
             cont.resume(false)
             return@suspendCancellableCoroutine
@@ -150,16 +154,30 @@ class WifiAwareService @Inject constructor(
             .build()
 
         publisherNetworkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onUnavailable() {
-                publisherNetworkCallback = null
+        lateinit var callback: ConnectivityManager.NetworkCallback
+        return withTimeoutOrNull(5_000L) {
+            suspendCancellableCoroutine { cont ->
+                callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onUnavailable() {
+                        if (cont.isActive) cont.resume(false)
+                    }
+
+                    override fun onLost(network: Network) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+                publisherNetworkCallback = callback
+                cont.invokeOnCancellation {
+                    runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+                }
+                runCatching { connectivityManager.requestNetwork(request, callback) }
+                    .onFailure { if (cont.isActive) cont.resume(false) }
             }
-        }
-        return runCatching {
-            connectivityManager.requestNetwork(request, callback)
-            publisherNetworkCallback = callback
-            true
-        }.getOrElse { false }
+        } ?: false
     }
 
     fun stop() {
