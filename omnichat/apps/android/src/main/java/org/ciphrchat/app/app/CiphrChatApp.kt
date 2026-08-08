@@ -27,6 +27,7 @@ import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.backup.RecoveryManager
 import org.ciphrchat.app.transport.TransportRegistry
+import org.ciphrchat.app.transport.TransportRuntimeManager
 import org.ciphrchat.app.ui.components.BottomNavItem
 import org.ciphrchat.app.ui.components.CiphrBottomBar
 import org.ciphrchat.app.ui.screens.*
@@ -39,6 +40,7 @@ class OnboardingViewModel @Inject constructor(
     private val appState: AppState,
     private val invitationService: InvitationService,
     private val recoveryManager: RecoveryManager,
+    private val transportRuntime: TransportRuntimeManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
@@ -71,7 +73,10 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    fun finishOnboarding() { appState.completeOnboarding() }
+    fun finishOnboarding() {
+        appState.completeOnboarding()
+        transportRuntime.startAll()
+    }
 
     fun restore(uri: Uri, password: String) {
         viewModelScope.launch {
@@ -82,6 +87,7 @@ class OnboardingViewModel @Inject constructor(
             result.onSuccess {
                 identity = identityRepository.current()
                 appState.completeOnboarding()
+                transportRuntime.startAll()
                 restoreCompleted = true
                 restoreMessage = null
             }.onFailure {
@@ -137,6 +143,7 @@ class ConnectViewModel @Inject constructor(
             for (adapter in localAdapters) {
                 runCatching {
                     adapter.start().getOrThrow()
+                    kotlinx.coroutines.delay(1_500)
                     peers += adapter.discoverPeers().getOrDefault(emptyList())
                 }
             }

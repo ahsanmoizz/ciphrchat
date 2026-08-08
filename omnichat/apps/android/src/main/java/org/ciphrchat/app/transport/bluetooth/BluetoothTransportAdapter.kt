@@ -48,8 +48,10 @@ class BluetoothTransportAdapter @Inject constructor(
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
     private val adapter = bluetoothManager?.adapter
+    private var started = false
 
     override suspend fun start(): Result<Unit> {
+        if (started && _state.value.availability == TransportAvailability.AVAILABLE) return Result.success(Unit)
         if (adapter == null) {
             val error = IllegalStateException("Bluetooth is not available on this device")
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
@@ -68,6 +70,7 @@ class BluetoothTransportAdapter @Inject constructor(
         val adStarted = bleAdvertiser.start()
         val scanStarted = bleScanner.start()
         gattServerManager.start()
+        started = true
         
         if (adStarted || scanStarted) {
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
@@ -79,6 +82,7 @@ class BluetoothTransportAdapter @Inject constructor(
     }
 
     override suspend fun stop(): Result<Unit> {
+        started = false
         bleAdvertiser.stop()
         bleScanner.stop()
         gattServerManager.stop()

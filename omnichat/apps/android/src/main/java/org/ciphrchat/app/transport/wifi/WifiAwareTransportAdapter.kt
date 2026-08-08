@@ -62,13 +62,14 @@ class WifiAwareTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.ERROR, it.message ?: "Unable to create Wi-Fi Aware listener")
             return Result.failure(it)
         }
+        serverSocket = socket
+        scope.launch { acceptLoop(socket) }
         if (!wifiAwareService.startPublisherNetwork(socket.localPort)) {
             socket.close()
+            serverSocket = null
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "Wi-Fi Aware data paths are unavailable on this device")
             return Result.failure(IllegalStateException("Wi-Fi Aware data path unavailable"))
         }
-        serverSocket = socket
-        scope.launch { acceptLoop(socket) }
         _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Secure Wi-Fi Aware messaging ready")
         return Result.success(Unit)
     }

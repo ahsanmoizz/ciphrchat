@@ -57,7 +57,8 @@ class NfcTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return Reachability.Reachable
+        return if (coordinator.hasPendingTransfer()) Reachability.Reachable
+        else Reachability.Unreachable("Tap phones together to open an NFC transfer session")
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

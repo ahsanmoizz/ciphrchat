@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.cos
@@ -49,6 +52,7 @@ class UltrasoundModem @Inject constructor(
     private var capture = ShortArray(SAMPLE_RATE * MAX_CAPTURE_SECONDS)
     private var captureSize = 0
     private var lastAttemptSize = 0
+    private val transmitMutex = Mutex()
 
     fun isListening(): Boolean = listening
 
@@ -111,7 +115,7 @@ class UltrasoundModem @Inject constructor(
     }
 
     /** Queues a bounded acoustic frame and returns whether it was accepted. */
-    fun transmit(payload: ByteArray): Boolean {
+    suspend fun transmit(payload: ByteArray): Boolean = transmitMutex.withLock {
         val frame = runCatching { UltrasoundFrameCodec.encode(payload) }.getOrNull() ?: return false
         val silence = ShortArray(SAMPLE_RATE / 10)
         val frameSamples = silence.size + frame.size * 8 * samplesPerBit + silence.size
@@ -130,7 +134,7 @@ class UltrasoundModem @Inject constructor(
                 }
             }
         }
-        return runCatching {
+        return try {
             audioTrack?.release()
             audioTrack = AudioTrack(
                 AudioManager.STREAM_MUSIC,
@@ -142,8 +146,10 @@ class UltrasoundModem @Inject constructor(
             )
             audioTrack?.write(audioBuffer, 0, audioBuffer.size)
             audioTrack?.play()
+            delay((audioBuffer.size * 1_000L / SAMPLE_RATE) + 120L)
+            audioTrack?.stop()
             true
-        }.getOrElse {
+        } catch (_: Throwable) {
             audioTrack?.release()
             audioTrack = null
             false

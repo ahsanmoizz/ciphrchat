@@ -40,6 +40,7 @@ class WifiAwareService @Inject constructor(
     private var subscribeSession: SubscribeDiscoverySession? = null
     private var publishedIdentity: String? = null
     private var publisherNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var publisherNetwork: Network? = null
 
     private val _discoveredPeers = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = _discoveredPeers.asStateFlow()
@@ -136,6 +137,7 @@ class WifiAwareService @Inject constructor(
 
     suspend fun startPublisherNetwork(port: Int): Boolean {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return false
+        if (publisherNetworkCallback != null) return true
         val session = withTimeoutOrNull(5_000L) {
             while (publishSession == null) delay(50)
             publishSession
@@ -154,35 +156,30 @@ class WifiAwareService @Inject constructor(
             .build()
 
         publisherNetworkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
-        lateinit var callback: ConnectivityManager.NetworkCallback
-        return withTimeoutOrNull(5_000L) {
-            suspendCancellableCoroutine { cont ->
-                callback = object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        if (cont.isActive) cont.resume(true)
-                    }
-
-                    override fun onUnavailable() {
-                        if (cont.isActive) cont.resume(false)
-                    }
-
-                    override fun onLost(network: Network) {
-                        if (cont.isActive) cont.resume(false)
-                    }
-                }
-                publisherNetworkCallback = callback
-                cont.invokeOnCancellation {
-                    runCatching { connectivityManager.unregisterNetworkCallback(callback) }
-                }
-                runCatching { connectivityManager.requestNetwork(request, callback) }
-                    .onFailure { if (cont.isActive) cont.resume(false) }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                publisherNetwork = network
             }
-        } ?: false
+
+            override fun onLost(network: Network) {
+                if (publisherNetwork == network) publisherNetwork = null
+            }
+
+            override fun onUnavailable() {
+                publisherNetwork = null
+            }
+        }
+        return runCatching {
+            connectivityManager.requestNetwork(request, callback)
+            publisherNetworkCallback = callback
+            true
+        }.getOrElse { false }
     }
 
     fun stop() {
         publisherNetworkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
         publisherNetworkCallback = null
+        publisherNetwork = null
         publishSession?.close()
         subscribeSession?.close()
         awareSession?.close()

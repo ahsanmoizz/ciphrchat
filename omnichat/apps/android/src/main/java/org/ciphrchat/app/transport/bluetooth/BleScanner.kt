@@ -32,6 +32,7 @@ class BleScanner @Inject constructor(
     
     // Map of hardware MAC address -> DiscoveredPeer
     private val discoveredMap = mutableMapOf<String, DiscoveredPeer>()
+    private val mapLock = Any()
 
     fun start(): Boolean {
         if (scanner == null || isScanning) return false
@@ -78,8 +79,10 @@ class BleScanner @Inject constructor(
             lastSeenEpochMs = System.currentTimeMillis()
         )
 
-        discoveredMap[macAddress] = peer
-        _discoveredPeers.value = discoveredMap.values.toList()
+        synchronized(mapLock) {
+            discoveredMap[macAddress] = peer
+            _discoveredPeers.value = discoveredMap.values.toList()
+        }
     }
 
     fun stop() {
@@ -89,12 +92,14 @@ class BleScanner @Inject constructor(
         }
         isScanning = false
         scanCallback = null
-        discoveredMap.clear()
-        _discoveredPeers.value = emptyList()
+        synchronized(mapLock) {
+            discoveredMap.clear()
+            _discoveredPeers.value = emptyList()
+        }
     }
 
     fun deviceAddressFor(peerId: String): String? =
-        discoveredMap.entries.firstOrNull { it.value.id == peerId }?.key
+        synchronized(mapLock) { discoveredMap.entries.firstOrNull { it.value.id == peerId }?.key }
 
-    fun discoveredDeviceAddresses(): List<String> = discoveredMap.keys.toList()
+    fun discoveredDeviceAddresses(): List<String> = synchronized(mapLock) { discoveredMap.keys.toList() }
 }

@@ -45,8 +45,8 @@ fun SettingsScreen(
         SettingsInfoRow("Automatic routing", "Always enabled")
         SettingsInfoRow("Internet", "Configured by the installed build")
         SettingsInfoRow("Wi-Fi", "Available when local discovery is permitted")
-        SettingsInfoRow("Bluetooth mesh", "Disabled until multi-hop routing is verified")
-        SettingsInfoRow("Experimental methods", "Disabled until independently validated")
+        SettingsInfoRow("Bluetooth mesh", "Authenticated multi-hop forwarding when nearby devices participate")
+        SettingsInfoRow("Nearby methods", "Wi-Fi Aware, Wi-Fi Direct, Bluetooth, and acoustic delivery are device-dependent")
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Privacy")

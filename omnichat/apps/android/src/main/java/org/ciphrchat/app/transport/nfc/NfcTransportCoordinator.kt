@@ -82,6 +82,8 @@ class NfcTransportCoordinator @Inject constructor(
             }
     }
 
+    fun hasPendingTransfer(): Boolean = synchronized(this) { pendingFrame != null }
+
     fun handleApdu(command: ByteArray): ByteArray {
         if (command.size < 4) return status(0x6D00)
         return when (command[1].toInt() and 0xFF) {
@@ -107,18 +109,30 @@ class NfcTransportCoordinator @Inject constructor(
                 val select = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, APPLICATION_ID.size.toByte()) + APPLICATION_ID + 0x00.toByte()
                 check(isoDep.transceive(select).endsWithSuccess()) { "CiphrChat NFC service not available" }
 
-                val outboundResult = synchronized(this@NfcTransportCoordinator) {
-                    pendingFrame?.let { frame -> pendingFrame = null; frame }
-                }?.let { frame ->
+                val outboundFrame = synchronized(this@NfcTransportCoordinator) { pendingFrame }
+                val outboundResult = outboundFrame?.let { frame ->
                     writeRemote(isoDep, frame)
                     SendResult.Accepted(TransportKind.NFC_PAIRING, "nfc-tap")
                 }
                 readRemote(isoDep)
+                if (outboundFrame != null) {
+                    synchronized(this@NfcTransportCoordinator) {
+                        if (pendingFrame === outboundFrame) pendingFrame = null
+                    }
+                }
                 outboundResult
             }.onSuccess { result ->
-                if (result != null) pendingResult?.complete(result)
+                if (result != null) {
+                    synchronized(this@NfcTransportCoordinator) {
+                        pendingResult?.complete(result)
+                        pendingResult = null
+                    }
+                }
             }.onFailure { error ->
-                pendingResult?.complete(SendResult.Failed(error))
+                synchronized(this@NfcTransportCoordinator) {
+                    pendingResult?.complete(SendResult.Failed(error))
+                    pendingResult = null
+                }
             }
             runCatching { isoDep.close() }
         }

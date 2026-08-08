@@ -24,6 +24,16 @@ class AutomaticRouter @Inject constructor(
         val failures = mutableListOf<String>()
 
         for (adapter in adapters) {
+            val started = try {
+                adapter.start()
+            } catch (error: Throwable) {
+                failures += "${adapter.kind}: ${error.message ?: "could not start"}"
+                continue
+            }
+            if (started.isFailure) {
+                failures += "${adapter.kind}: ${started.exceptionOrNull()?.message ?: "could not start"}"
+                continue
+            }
             if (envelope.encryptedPayload.size > LARGE_PAYLOAD_THRESHOLD &&
                 !adapter.capabilities.contains(TransportCapability.LARGE_PAYLOAD)
             ) {

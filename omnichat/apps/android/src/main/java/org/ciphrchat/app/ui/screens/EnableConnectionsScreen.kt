@@ -79,7 +79,7 @@ fun EnableConnectionsScreen(
         Spacer(Modifier.height(8.dp))
 
         Text(
-            text = "Internet messaging is ready. Nearby connections are optional and require permission.",
+            text = "CiphrChat uses secure Internet delivery whenever available, with nearby transports as device-supported fallbacks.",
             style = MaterialTheme.typography.bodyMedium,
             color = CiphrTextSecondary
         )
@@ -99,13 +99,13 @@ fun EnableConnectionsScreen(
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.WifiTethering, "Wi-Fi Aware", "Compatible devices", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Microphone permission", CiphrWarning)
+        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Secure short-range data; microphone permission", CiphrWarning)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Nfc, "NFC", "Tap phones to transfer", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.Nfc, "NFC", "Tap phones to open a live encrypted transfer", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity verification", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity-assisted delivery on supported devices", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Transmitter only on Android", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Device-dependent optical hardware", CiphrTextSecondary)
 
         permissionMessage?.let {
             Spacer(Modifier.height(12.dp))
