@@ -46,7 +46,7 @@ class InfraredOpticalDecoder(
             repeat(16) { bits.removeFirst() }
         }
         if (expectedBytes > 0 && bits.size >= expectedBytes * 8) {
-            val frame = ByteArray(expectedBytes) { readBits(bits, 8, it * 8) }
+            val frame = ByteArray(expectedBytes) { readBits(bits, 8, it * 8).toByte() }
             val payloadLength = expectedPayloadBytes
             reset()
             return InfraredFrameCodec.decode(
