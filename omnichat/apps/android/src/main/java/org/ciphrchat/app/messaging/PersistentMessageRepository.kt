@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.util.Base64
 import org.json.JSONObject
 import kotlinx.coroutines.flow.map
@@ -85,52 +86,56 @@ class PersistentMessageRepository @Inject constructor(
         conversationId: String,
         recipientId: String,
         text: String
-    ): Result<ChatMessage> = runCatching {
-        require(text.isNotBlank()) { "Message cannot be empty" }
-        require(text.length <= 4_000) { "Message is too long" }
+    ): Result<ChatMessage> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(text.isNotBlank()) { "Message cannot be empty" }
+            require(text.length <= 4_000) { "Message is too long" }
 
-        val contact = contacts.find(recipientId)
-            ?: error("Contact is not paired: scan or enter their invitation first")
-        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-        if (!sessions.hasSession(address)) {
-            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+            val contact = contacts.find(recipientId)
+                ?: error("Contact is not paired: scan or enter their invitation first")
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            if (!sessions.hasSession(address)) {
+                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+            }
+            val trimmed = text.trim()
+            sendContent(
+                conversationId = conversationId,
+                recipientId = recipientId,
+                address = address,
+                plaintext = MessageContentCodec.encodeText(trimmed),
+                body = trimmed
+            )
         }
-        val trimmed = text.trim()
-        sendContent(
-            conversationId = conversationId,
-            recipientId = recipientId,
-            address = address,
-            plaintext = MessageContentCodec.encodeText(trimmed),
-            body = trimmed
-        )
     }
 
     override suspend fun sendAttachment(
         conversationId: String,
         recipientId: String,
         uri: Uri
-    ): Result<ChatMessage> = runCatching {
-        val input = attachmentStore.read(uri)
-        require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
-        val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
-        val contact = contacts.find(recipientId)
-            ?: error("Contact is not paired: scan or enter their invitation first")
-        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-        if (!sessions.hasSession(address)) {
-            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+    ): Result<ChatMessage> = withContext(Dispatchers.IO) {
+        runCatching {
+            val input = attachmentStore.read(uri)
+            require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
+            val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
+            val contact = contacts.find(recipientId)
+                ?: error("Contact is not paired: scan or enter their invitation first")
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            if (!sessions.hasSession(address)) {
+                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+            }
+            sendContent(
+                conversationId = conversationId,
+                recipientId = recipientId,
+                address = address,
+                plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
+                body = "Attachment: ${input.fileName}",
+                attachmentFileName = input.fileName,
+                attachmentMimeType = input.mimeType,
+                attachmentStoragePath = stored.path,
+                attachmentSizeBytes = stored.size,
+                attachmentSha256 = stored.sha256
+            )
         }
-        sendContent(
-            conversationId = conversationId,
-            recipientId = recipientId,
-            address = address,
-            plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
-            body = "Attachment: ${input.fileName}",
-            attachmentFileName = input.fileName,
-            attachmentMimeType = input.mimeType,
-            attachmentStoragePath = stored.path,
-            attachmentSizeBytes = stored.size,
-            attachmentSha256 = stored.sha256
-        )
     }
 
     private suspend fun sendContent(

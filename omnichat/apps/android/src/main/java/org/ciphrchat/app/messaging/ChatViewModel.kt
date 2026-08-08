@@ -4,9 +4,11 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import android.net.Uri
@@ -63,7 +65,9 @@ class ChatViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            onReady(runCatching { attachmentStore.materialize(path, name) })
+            onReady(withContext(Dispatchers.IO) {
+                runCatching { attachmentStore.materialize(path, name) }
+            })
         }
     }
 }
