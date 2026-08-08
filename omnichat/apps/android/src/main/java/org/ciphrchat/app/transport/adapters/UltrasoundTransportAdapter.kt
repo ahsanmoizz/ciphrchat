@@ -16,6 +16,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.nio.ByteBuffer
 import org.ciphrchat.app.transport.*
+import org.ciphrchat.app.transport.ultrasound.UltrasoundChunkCodec
 import org.ciphrchat.app.transport.ultrasound.UltrasoundModem
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -51,7 +52,7 @@ class UltrasoundTransportAdapter @Inject constructor(
                 modem.incomingData.collect { bytes ->
                     runCatching {
                         val chunk = UltrasoundChunkCodec.decode(bytes) ?: return@runCatching
-                        val key = chunk.transferId.joinToString("") { "%02x".format(it) }
+                        val key = chunk.transferId.joinToString("") { byte -> "%02x".format(byte) }
                         val assembled = synchronized(assemblies) {
                             val current = assemblies.getOrPut(key) {
                                 Assembly(chunk.total, arrayOfNulls(chunk.total))
