@@ -36,7 +36,11 @@ class UwbTransportAdapter @Inject constructor(
             return Result.failure(Exception("UWB hardware not available"))
         }
         
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "UWB proximity assist ready; messages use authenticated nearby radios")
+        // A UWB radio alone is not enough to deliver an application message:
+        // Android requires an exchanged ranging session and a separate data
+        // bearer (normally BLE/Wi-Fi). Keep this out of routing until that
+        // peer session is negotiated instead of reporting a false capability.
+        _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB radio detected; peer ranging session is not negotiated")
         return Result.success(Unit)
     }
 

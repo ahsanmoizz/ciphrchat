@@ -32,7 +32,10 @@ class InfraredTransportAdapter @Inject constructor(
             return Result.failure(Exception("IR not supported"))
         }
         
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "IR transmitter available; Android phones cannot receive arbitrary IR data")
+        // ConsumerIrManager exposes transmission only. Without a camera/IR
+        // receiver session there is no acknowledged phone-to-phone delivery,
+        // so do not advertise this as a usable message route.
+        _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "IR emitter detected, but this Android device has no verified IR receive path")
         return Result.success(Unit)
     }
 
