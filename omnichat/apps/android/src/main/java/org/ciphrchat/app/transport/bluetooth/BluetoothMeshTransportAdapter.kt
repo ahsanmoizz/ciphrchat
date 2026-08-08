@@ -26,6 +26,8 @@ import org.ciphrchat.app.transport.TransportKind
 import org.ciphrchat.app.transport.TransportState
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @Singleton
 class BluetoothMeshTransportAdapter @Inject constructor(
@@ -51,6 +53,7 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var started = false
     private var forwardingJob: Job? = null
+    private val forwardingMutex = Mutex()
 
     override suspend fun start(): Result<Unit> {
         checkBatteryState()
@@ -72,7 +75,9 @@ class BluetoothMeshTransportAdapter @Inject constructor(
                     if (event.transport != TransportKind.BLUETOOTH_DIRECT && event.transport != TransportKind.BLUETOOTH_MESH) return@collect
                     val envelope = event.envelope
                     if (!meshRouter.shouldForward(envelope, localId)) return@collect
-                    bluetoothTransportAdapter.broadcastEnvelope(meshRouter.prepareForForwarding(envelope))
+                    forwardingMutex.withLock {
+                        bluetoothTransportAdapter.broadcastEnvelope(meshRouter.prepareForForwarding(envelope))
+                    }
                 }
             }
         }
@@ -84,7 +89,6 @@ class BluetoothMeshTransportAdapter @Inject constructor(
         started = false
         forwardingJob?.cancel()
         forwardingJob = null
-        bluetoothTransportAdapter.stop()
         _state.value = TransportState(kind, TransportAvailability.DISABLED_BY_USER, "Stopped")
         return Result.success(Unit)
     }

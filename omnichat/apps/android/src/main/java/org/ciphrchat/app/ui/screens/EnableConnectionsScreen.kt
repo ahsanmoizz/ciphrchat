@@ -57,6 +57,7 @@ fun EnableConnectionsScreen(
                 add(Manifest.permission.ACCESS_COARSE_LOCATION)
             }
             add(Manifest.permission.RECORD_AUDIO)
+            add(Manifest.permission.CAMERA)
         }.toTypedArray()
     }
     Column(
@@ -105,7 +106,7 @@ fun EnableConnectionsScreen(
         HorizontalDivider(color = CiphrBorder)
         CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity-assisted delivery on supported devices", CiphrTextSecondary)
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Device-dependent optical hardware", CiphrTextSecondary)
+        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Camera + IR emitter on both phones", CiphrTextSecondary)
 
         permissionMessage?.let {
             Spacer(Modifier.height(12.dp))

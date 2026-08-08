@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
@@ -21,6 +22,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.ArrayDeque
 
 @Singleton
 class NfcTransportCoordinator @Inject constructor(
@@ -33,12 +35,15 @@ class NfcTransportCoordinator @Inject constructor(
         private const val MAX_CHUNK = 240
         private const val MAX_FRAME_BYTES = 60 * 1024
         private const val TIMEOUT_MS = 30_000L
+        private const val SESSION_IDLE_MS = 8_000L
+        private const val MAX_PENDING_FRAMES = 16
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var nfcAdapter: NfcAdapter? = null
-    private var pendingFrame: ByteArray? = null
-    private var pendingResult: CompletableDeferred<SendResult>? = null
+    private data class PendingOutbound(val frame: ByteArray, val result: CompletableDeferred<SendResult>)
+    private val outboundQueue = ArrayDeque<PendingOutbound>()
+    private var hceFrame: ByteArray? = null
     private val incoming = ByteArrayOutputStream()
     private var incomingExpected = -1
 
@@ -67,22 +72,20 @@ class NfcTransportCoordinator @Inject constructor(
         if (frame.size > MAX_FRAME_BYTES) return SendResult.Rejected("NFC envelope is too large")
 
         val result = CompletableDeferred<SendResult>()
+        val pending = PendingOutbound(frame, result)
         synchronized(this) {
-            if (pendingFrame != null) return SendResult.Rejected("NFC transfer already waiting for a tap")
-            pendingFrame = frame
-            pendingResult = result
+            if (outboundQueue.size >= MAX_PENDING_FRAMES) return SendResult.Rejected("NFC transfer queue is full")
+            outboundQueue.addLast(pending)
+            if (hceFrame == null) hceFrame = frame
         }
         return withTimeoutOrNull(TIMEOUT_MS) { result.await() }
             ?: synchronized(this) {
-                if (pendingResult === result) {
-                    pendingFrame = null
-                    pendingResult = null
-                }
+                outboundQueue.removeIf { it.result === result }
                 SendResult.Rejected("Bring the other CiphrChat phone close to complete NFC transfer")
             }
     }
 
-    fun hasPendingTransfer(): Boolean = synchronized(this) { pendingFrame != null }
+    fun hasPendingTransfer(): Boolean = synchronized(this) { outboundQueue.isNotEmpty() || hceFrame != null }
 
     fun handleApdu(command: ByteArray): ByteArray {
         if (command.size < 4) return status(0x6D00)
@@ -109,29 +112,31 @@ class NfcTransportCoordinator @Inject constructor(
                 val select = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, APPLICATION_ID.size.toByte()) + APPLICATION_ID + 0x00.toByte()
                 check(isoDep.transceive(select).endsWithSuccess()) { "CiphrChat NFC service not available" }
 
-                val outboundFrame = synchronized(this@NfcTransportCoordinator) { pendingFrame }
-                val outboundResult = outboundFrame?.let { frame ->
-                    writeRemote(isoDep, frame)
-                    SendResult.Accepted(TransportKind.NFC_PAIRING, "nfc-tap")
-                }
-                readRemote(isoDep)
-                if (outboundFrame != null) {
-                    synchronized(this@NfcTransportCoordinator) {
-                        if (pendingFrame === outboundFrame) pendingFrame = null
+                val sessionStarted = System.currentTimeMillis()
+                var lastActivity = sessionStarted
+                while (System.currentTimeMillis() - lastActivity < SESSION_IDLE_MS) {
+                    val outbound = synchronized(this@NfcTransportCoordinator) {
+                        outboundQueue.firstOrNull()
                     }
+                    if (outbound != null) {
+                        writeRemote(isoDep, outbound.frame)
+                        synchronized(this@NfcTransportCoordinator) {
+                            outboundQueue.removeFirstOccurrence(outbound)
+                        }
+                        outbound.result.complete(SendResult.Accepted(TransportKind.NFC_PAIRING, "nfc-tap-session"))
+                        lastActivity = System.currentTimeMillis()
+                    }
+                    readRemote(isoDep)
+                    lastActivity = System.currentTimeMillis()
+                    if (outbound == null && !hasPendingTransfer()) break
+                    delay(40)
                 }
-                outboundResult
+                null
             }.onSuccess { result ->
-                if (result != null) {
-                    synchronized(this@NfcTransportCoordinator) {
-                        pendingResult?.complete(result)
-                        pendingResult = null
-                    }
-                }
+                result
             }.onFailure { error ->
                 synchronized(this@NfcTransportCoordinator) {
-                    pendingResult?.complete(SendResult.Failed(error))
-                    pendingResult = null
+                    outboundQueue.firstOrNull()?.result?.complete(SendResult.Failed(error))
                 }
             }
             runCatching { isoDep.close() }
@@ -191,8 +196,15 @@ class NfcTransportCoordinator @Inject constructor(
     }
 
     private fun readPending(offset: Int): ByteArray {
-        val frame = synchronized(this) { pendingFrame } ?: return byteArrayOf()
-        if (offset >= frame.size) return byteArrayOf()
+        val frame = synchronized(this) { hceFrame } ?: return byteArrayOf()
+        if (offset >= frame.size) {
+            synchronized(this) {
+                if (hceFrame === frame) {
+                    hceFrame = outboundQueue.firstOrNull()?.frame
+                }
+            }
+            return byteArrayOf()
+        }
         val payload = ByteArray(4 + minOf(MAX_CHUNK - 4, frame.size - offset))
         if (offset == 0) {
             payload[0] = (frame.size ushr 24).toByte()

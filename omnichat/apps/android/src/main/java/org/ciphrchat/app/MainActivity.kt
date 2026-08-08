@@ -9,12 +9,14 @@ import org.ciphrchat.app.app.CiphrChatApp
 import org.ciphrchat.app.ui.theme.CiphrChatTheme
 import org.ciphrchat.app.transport.nfc.NfcTransportCoordinator
 import org.ciphrchat.app.transport.TransportRuntimeManager
+import org.ciphrchat.app.transport.infrared.InfraredCameraReceiver
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var nfcCoordinator: NfcTransportCoordinator
     @Inject lateinit var transportRuntime: TransportRuntimeManager
+    @Inject lateinit var infraredReceiver: InfraredCameraReceiver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,11 +30,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        infraredReceiver.attach(this)
         transportRuntime.startAll()
         nfcCoordinator.attach(this)
     }
 
     override fun onPause() {
+        infraredReceiver.detach()
         nfcCoordinator.detach(this)
         super.onPause()
     }

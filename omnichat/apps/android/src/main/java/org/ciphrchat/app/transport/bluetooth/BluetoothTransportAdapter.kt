@@ -71,12 +71,12 @@ class BluetoothTransportAdapter @Inject constructor(
         val adStarted = bleAdvertiser.start()
         val scanStarted = bleScanner.start()
         gattServerManager.start()
-        started = true
-        
         if (adStarted || scanStarted) {
+            started = true
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
             return Result.success(Unit)
         }
+        gattServerManager.stop()
         val error = Exception("Bluetooth start failed")
         _state.value = TransportState(kind, TransportAvailability.ERROR, error.message!!)
         return Result.failure(error)
@@ -107,7 +107,26 @@ class BluetoothTransportAdapter @Inject constructor(
         return sendToDevice(deviceMac, envelope)
     }
 
-    suspend fun sendToDevice(deviceMac: String, envelope: OutboundEnvelope): SendResult =
+    suspend fun sendToDevice(deviceMac: String, envelope: OutboundEnvelope): SendResult {
+        val payload = ByteArrayOutputStream().use { buffer ->
+            DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
+            buffer.toByteArray()
+        }
+        return sendFramedToDevice(deviceMac, payload, GattServerManager.GATT_CHARACTERISTIC_UUID, "ble-gatt-frame")
+    }
+
+    suspend fun sendControlToDevice(deviceMac: String, payload: ByteArray): SendResult =
+        sendFramedToDevice(deviceMac, payload, GattServerManager.CONTROL_CHARACTERISTIC_UUID, "ble-gatt-control")
+
+    suspend fun deviceAddressForRecipient(recipientId: String): String? =
+        bleScanner.deviceAddressFor(discoveryTokenFor(recipientId))
+
+    private suspend fun sendFramedToDevice(
+        deviceMac: String,
+        payload: ByteArray,
+        characteristicUuid: java.util.UUID,
+        routeId: String
+    ): SendResult =
         withTimeoutOrNull(20_000L) {
             suspendCancellableCoroutine { cont ->
         val device = adapter?.getRemoteDevice(deviceMac)
@@ -118,10 +137,6 @@ class BluetoothTransportAdapter @Inject constructor(
         }
 
         var gatt: BluetoothGatt? = null
-        val payload = ByteArrayOutputStream().use { buffer ->
-            DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
-            buffer.toByteArray()
-        }
         var negotiatedMtu = 23
         var offset = 0
         val completed = AtomicBoolean(false)
@@ -158,7 +173,7 @@ class BluetoothTransportAdapter @Inject constructor(
             override fun onCharacteristicWrite(g: BluetoothGatt, char: BluetoothGattCharacteristic, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     if (offset >= payload.size) {
-                        complete(SendResult.Accepted(kind, "ble-gatt-frame"))
+                        complete(SendResult.Accepted(kind, routeId))
                         g.disconnect()
                     } else {
                         writeNextChunk(g)
@@ -171,7 +186,7 @@ class BluetoothTransportAdapter @Inject constructor(
             
             private fun writeNextChunk(g: BluetoothGatt) {
                 val service = g.getService(GattServerManager.GATT_SERVICE_UUID)
-                val characteristic = service?.getCharacteristic(GattServerManager.GATT_CHARACTERISTIC_UUID)
+                val characteristic = service?.getCharacteristic(characteristicUuid)
                 
                 if (characteristic == null) {
                     complete(SendResult.Failure(Exception("GATT Service/Characteristic not found")))

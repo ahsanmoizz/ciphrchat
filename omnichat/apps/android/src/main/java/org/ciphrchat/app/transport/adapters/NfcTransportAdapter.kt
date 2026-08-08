@@ -41,7 +41,7 @@ class NfcTransportAdapter @Inject constructor(
             return Result.failure(Exception("NFC disabled"))
         }
 
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "NFC tap transfer ready")
+        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "NFC tap session ready; hold phones together to transfer")
         return Result.success(Unit)
     }
 
@@ -56,8 +56,7 @@ class NfcTransportAdapter @Inject constructor(
     }
 
     override suspend fun canReach(recipientId: String): Reachability {
-        return if (coordinator.hasPendingTransfer()) Reachability.Reachable
-        else Reachability.Unreachable("Tap phones together to open an NFC transfer session")
+        return Reachability.Reachable
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

@@ -16,6 +16,7 @@ class AutomaticRouter @Inject constructor(
         TransportKind.BLUETOOTH_MESH,
         TransportKind.ULTRASOUND,
         TransportKind.INFRARED,
+        TransportKind.NFC_PAIRING,
         TransportKind.INTERNET_RELAY
     )
 
