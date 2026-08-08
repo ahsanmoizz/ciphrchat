@@ -13,7 +13,8 @@ android {
         applicationId = "org.ciphrchat.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        // Bump the install identity so Android refreshes the launcher icon on upgrade.
+        versionCode = 2
         versionName = "0.1.0-dev"
         val relayAddress = project.providers.gradleProperty("ciphrchatRelayAddress")
             .orElse(project.providers.environmentVariable("CIPHRCHAT_RELAY_ADDRESS"))

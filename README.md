@@ -34,6 +34,8 @@ For Internet messaging, first deploy the required relay and set the repository v
 
 The implemented message routes are Internet/libp2p relay, LAN, Wi-Fi Direct, Wi-Fi Aware, Bluetooth GATT, Bluetooth mesh, nearby audio, NFC tap sessions, UWB-assisted BLE delivery, and camera/IR optical delivery on compatible phones. Chat attachments preserve their MIME type and are encrypted end-to-end before transport; the current client limit is 512 KiB per attachment, so images, short videos, audio clips, PDFs, documents, and arbitrary files can be shared through the large-payload routes. Nearby audio, NFC, mesh, infrared, and UWB-assisted delivery remain device- and proximity-dependent. Live relay delivery and hardware interoperability still require the release test matrix. See [transport capabilities](docs/TRANSPORTS.md), [production status](docs/PRODUCTION_STATUS.md), and the [production verification audit](docs/PRODUCTION_VERIFICATION.md) for release gates.
 
+For a repeatable two-phone test, follow the [CiphrChat user test manual](docs/USER_TESTING.md). It explains the automatic capability scan, transport-by-transport checks, and the supported media test.
+
 ## Build from source
 
 Requirements:

@@ -36,9 +36,9 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/backup_rules"
-        android:icon="@drawable/ciphrchatlogo"
+        android:icon="@mipmap/ic_launcher"
         android:label="CiphrChat"
-        android:roundIcon="@drawable/ciphrchatlogo"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.CiphrChat">
 
         <activity

@@ -1,7 +1,9 @@
 package org.ciphrchat.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -31,6 +33,7 @@ fun ConnectScreen(
     transportStates: StateFlow<List<TransportState>>? = null
 ) {
     var invitation by remember { mutableStateOf("") }
+    val scrollState = rememberScrollState()
     val states = if (transportStates != null) {
         val collected by transportStates.collectAsState()
         collected
@@ -39,7 +42,9 @@ fun ConnectScreen(
     }
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
+            .padding(bottom = 24.dp)
     ) {
         Spacer(Modifier.height(16.dp))
         Text("Connect", style = MaterialTheme.typography.headlineLarge, color = CiphrText)
@@ -83,6 +88,8 @@ fun ConnectScreen(
         TransportRow(states, TransportKind.INTERNET_DIRECT, Icons.Default.Public, "Internet")
         HorizontalDivider(color = CiphrBorder)
         TransportRow(states, TransportKind.WIFI_LAN, Icons.Default.Wifi, "Wi-Fi LAN")
+        HorizontalDivider(color = CiphrBorder)
+        TransportRow(states, TransportKind.WIFI_DIRECT, Icons.Default.WifiTethering, "Wi-Fi Direct")
         HorizontalDivider(color = CiphrBorder)
         TransportRow(states, TransportKind.WIFI_AWARE, Icons.Default.WifiTethering, "Wi-Fi Aware")
         HorizontalDivider(color = CiphrBorder)

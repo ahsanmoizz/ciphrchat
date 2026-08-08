@@ -60,6 +60,8 @@ class OnboardingViewModel @Inject constructor(
                 identity = it
                 appState.completeOnboarding()
                 invitationService.createInvitation().onSuccess { value -> invitation = value }
+                // Re-start capability detection and transport listeners after a normal app restart.
+                transportRuntime.startAll()
             }
         }
     }

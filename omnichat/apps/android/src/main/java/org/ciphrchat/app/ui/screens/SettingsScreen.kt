@@ -2,7 +2,9 @@ package org.ciphrchat.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
@@ -21,9 +23,12 @@ fun SettingsScreen(
     onRestoreIdentity: () -> Unit = {},
     backupMessage: String? = null
 ) {
+    val scrollState = rememberScrollState()
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp)
+            .padding(bottom = 24.dp)
     ) {
         Spacer(Modifier.height(16.dp))
         Text("Settings", style = MaterialTheme.typography.headlineLarge, color = CiphrText)
