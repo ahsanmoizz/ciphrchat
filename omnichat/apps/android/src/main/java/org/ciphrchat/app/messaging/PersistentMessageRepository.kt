@@ -182,8 +182,9 @@ class PersistentMessageRepository @Inject constructor(
             encryptedPayload = ciphertext.serialize(),
             testOnly = false
         )
-        val finalEntity = when (val result = router.route(envelope)) {
-            is SendResult.Accepted -> entity.copy(status = MessageStatus.SENT, selectedTransport = result.transport.name)
+        val sendResult = router.route(envelope)
+        val finalEntity = when (sendResult) {
+            is SendResult.Accepted -> entity.copy(status = MessageStatus.SENT, selectedTransport = sendResult.transport.name)
             is SendResult.Rejected -> entity.copy(status = MessageStatus.QUEUED)
             is SendResult.Failed -> entity.copy(status = MessageStatus.FAILED)
             is SendResult.Failure -> entity.copy(status = MessageStatus.FAILED)
@@ -191,7 +192,7 @@ class PersistentMessageRepository @Inject constructor(
         }
         dao.updateMessage(finalEntity)
         if (finalEntity.status == MessageStatus.FAILED || finalEntity.status == MessageStatus.QUEUED) {
-            val detail = when (val failure = result) {
+            val detail = when (val failure = sendResult) {
                 is SendResult.Rejected -> failure.reason
                 is SendResult.Failed -> failure.error.message
                 is SendResult.Failure -> failure.error.message
