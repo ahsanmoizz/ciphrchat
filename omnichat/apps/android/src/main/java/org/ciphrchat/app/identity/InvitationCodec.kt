@@ -3,7 +3,6 @@ package org.ciphrchat.app.identity
 import android.util.Base64
 import org.ciphrchat.app.data.ContactEntity
 import org.json.JSONObject
-import org.json.JSONException
 import org.whispersystems.libsignal.state.PreKeyBundle
 import org.ciphrchat.app.transport.bluetooth.ContactDiscoveryToken
 import java.security.MessageDigest
@@ -42,7 +41,7 @@ object InvitationCodec {
         }
         val json = try {
             JSONObject(invitation)
-        } catch (error: JSONException) {
+        } catch (error: Exception) {
             throw IllegalArgumentException(
                 "This is not a valid CiphrChat invitation. Scan their QR or paste the full secure invitation.",
                 error
