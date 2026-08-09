@@ -48,6 +48,8 @@ jobs:
         unzip -t "$APK"
         APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
         "$APKSIGNER" verify --verbose "$APK"
+        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest min-sdk "$APK"
+        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "$APK"
         sha256sum "$APK" | tee "$APK.sha256"
 
     - name: Run Lint

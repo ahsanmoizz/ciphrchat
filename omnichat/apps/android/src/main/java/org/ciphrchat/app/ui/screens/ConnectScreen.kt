@@ -1,5 +1,8 @@
 package org.ciphrchat.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -30,7 +33,9 @@ fun ConnectScreen(
     onFindNearby: () -> Unit = {},
     statusMessage: String? = null,
     nearbyStatus: String? = null,
-    transportStates: StateFlow<List<TransportState>>? = null
+    transportStates: StateFlow<List<TransportState>>? = null,
+    missingPermissions: List<String> = emptyList(),
+    onPermissionsChanged: () -> Unit = {}
 ) {
     var invitation by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
@@ -40,6 +45,9 @@ fun ConnectScreen(
     } else {
         emptyList()
     }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { onPermissionsChanged() }
     Column(
         modifier = Modifier.fillMaxSize().background(CiphrBackground).statusBarsPadding()
             .verticalScroll(scrollState)
@@ -82,6 +90,14 @@ fun ConnectScreen(
 
         Spacer(Modifier.height(24.dp))
         CiphrSectionHeader("Connection methods")
+
+        if (missingPermissions.isNotEmpty()) {
+            CiphrSecondaryButton(
+                "Enable detected connection methods",
+                onClick = { permissionLauncher.launch(missingPermissions.toTypedArray()) }
+            )
+            Spacer(Modifier.height(12.dp))
+        }
 
         CiphrTransportRow(Icons.Default.SwapVert, "Automatic routing", "On", CiphrSuccess)
         HorizontalDivider(color = CiphrBorder)

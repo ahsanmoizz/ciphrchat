@@ -5,7 +5,8 @@ import javax.inject.Singleton
 
 @Singleton
 class AutomaticRouter @Inject constructor(
-    private val registry: TransportRegistry
+    private val registry: TransportRegistry,
+    private val capabilityDetector: AndroidCapabilityDetector
 ) {
     private val priority = listOf(
         TransportKind.INTERNET_DIRECT,
@@ -24,8 +25,14 @@ class AutomaticRouter @Inject constructor(
     suspend fun route(envelope: OutboundEnvelope): SendResult {
         val adapters = priority.mapNotNull(registry::byKind)
         val failures = mutableListOf<String>()
+        val snapshot = capabilityDetector.refresh()
 
         for (adapter in adapters) {
+            val capability = snapshot.assessment(adapter.kind)
+            if (!capability.canStart) {
+                failures += "${adapter.kind}: ${capability.detail}"
+                continue
+            }
             val started = try {
                 adapter.start()
             } catch (error: Throwable) {

@@ -21,8 +21,7 @@ class BleScanner @Inject constructor(
     private val context: Context
 ) {
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
-    private val adapter = bluetoothManager?.adapter
-    private val scanner = adapter?.bluetoothLeScanner
+    private val scanner get() = bluetoothManager?.adapter?.bluetoothLeScanner
     
     private var isScanning = false
     private var scanCallback: ScanCallback? = null
@@ -35,7 +34,8 @@ class BleScanner @Inject constructor(
     private val mapLock = Any()
 
     fun start(): Boolean {
-        if (scanner == null || isScanning) return false
+        if (isScanning) return true
+        val activeScanner = runCatching { scanner }.getOrNull() ?: return false
 
         val filter = ScanFilter.Builder()
             .setServiceUuid(BleAdvertiser.OMNICHAT_SERVICE_UUID)
@@ -59,9 +59,15 @@ class BleScanner @Inject constructor(
             }
         }
 
-        scanner.startScan(listOf(filter), settings, scanCallback)
-        isScanning = true
-        return true
+        return runCatching {
+            activeScanner.startScan(listOf(filter), settings, scanCallback)
+            isScanning = true
+            true
+        }.getOrElse {
+            scanCallback = null
+            isScanning = false
+            false
+        }
     }
 
     private fun processScanResult(result: ScanResult) {
@@ -86,10 +92,9 @@ class BleScanner @Inject constructor(
     }
 
     fun stop() {
-        if (!isScanning || scanner == null) return
-        scanCallback?.let {
-            scanner.stopScan(it)
-        }
+        if (!isScanning) return
+        val activeScanner = runCatching { scanner }.getOrNull()
+        scanCallback?.let { callback -> runCatching { activeScanner?.stopScan(callback) } }
         isScanning = false
         scanCallback = null
         synchronized(mapLock) {

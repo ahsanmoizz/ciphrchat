@@ -46,11 +46,12 @@ class GattServerManager @Inject constructor(
     private val controlAssemblyBuffers = mutableMapOf<String, ByteArrayOutputStream>()
     private val controlExpectedLengths = mutableMapOf<String, Int>()
 
-    fun start() {
-        if (started || bluetoothManager == null) return
-        started = true
-        
-        gattServer = bluetoothManager.openGattServer(context, gattServerCallback)
+    fun start(): Boolean {
+        if (started && gattServer != null) return true
+        if (bluetoothManager == null) return false
+
+        gattServer = runCatching { bluetoothManager.openGattServer(context, gattServerCallback) }.getOrNull()
+            ?: return false
         
         val service = BluetoothGattService(GATT_SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         val characteristic = BluetoothGattCharacteristic(
@@ -66,7 +67,13 @@ class GattServerManager @Inject constructor(
                 BluetoothGattCharacteristic.PERMISSION_WRITE
             )
         )
-        gattServer?.addService(service)
+        val added = runCatching { gattServer?.addService(service) == true }.getOrDefault(false)
+        started = added
+        if (!added) {
+            runCatching { gattServer?.close() }
+            gattServer = null
+        }
+        return added
     }
 
     fun stop() {

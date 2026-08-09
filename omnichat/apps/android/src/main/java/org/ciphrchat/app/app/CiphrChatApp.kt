@@ -28,6 +28,7 @@ import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.backup.RecoveryManager
 import org.ciphrchat.app.transport.TransportRegistry
 import org.ciphrchat.app.transport.TransportRuntimeManager
+import org.ciphrchat.app.transport.AndroidCapabilityDetector
 import org.ciphrchat.app.ui.components.BottomNavItem
 import org.ciphrchat.app.ui.components.CiphrBottomBar
 import org.ciphrchat.app.ui.screens.*
@@ -41,6 +42,8 @@ class OnboardingViewModel @Inject constructor(
     private val invitationService: InvitationService,
     private val recoveryManager: RecoveryManager,
     private val transportRuntime: TransportRuntimeManager,
+    private val transportRegistry: TransportRegistry,
+    private val capabilityDetector: AndroidCapabilityDetector,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
@@ -53,17 +56,28 @@ class OnboardingViewModel @Inject constructor(
         private set
     var backupMessage by mutableStateOf<String?>(null)
         private set
+    var connectionPermissions by mutableStateOf<List<String>>(emptyList())
+        private set
+    var startupMessage by mutableStateOf<String?>(null)
+        private set
+
+    val transportStates = transportRegistry.states()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         viewModelScope.launch {
-            identityRepository.current()?.let {
-                identity = it
-                appState.completeOnboarding()
-                invitationService.createInvitation().onSuccess { value -> invitation = value }
-                // Re-start capability detection and transport listeners after a normal app restart.
-                transportRuntime.startAll()
-            }
+            runCatching { identityRepository.current() }
+                .onSuccess { current ->
+                    current?.let {
+                        identity = it
+                        appState.completeOnboarding()
+                        invitationService.createInvitation().onSuccess { value -> invitation = value }
+                        transportRuntime.startAll()
+                    }
+                }
+                .onFailure { startupMessage = it.message ?: "Could not open the local identity" }
         }
+        refreshConnections()
     }
 
     fun createIdentity(name: String) {
@@ -77,6 +91,11 @@ class OnboardingViewModel @Inject constructor(
 
     fun finishOnboarding() {
         appState.completeOnboarding()
+        transportRuntime.startAll()
+    }
+
+    fun refreshConnections() {
+        connectionPermissions = capabilityDetector.refresh().missingPermissions
         transportRuntime.startAll()
     }
 
@@ -116,15 +135,28 @@ class OnboardingViewModel @Inject constructor(
 @HiltViewModel
 class ConnectViewModel @Inject constructor(
     private val invitationService: InvitationService,
-    private val transportRegistry: TransportRegistry
+    private val transportRegistry: TransportRegistry,
+    private val capabilityDetector: AndroidCapabilityDetector,
+    private val transportRuntime: TransportRuntimeManager
 ) : ViewModel() {
     var status by mutableStateOf<String?>(null)
         private set
     var nearbyStatus by mutableStateOf<String?>(null)
         private set
+    var connectionPermissions by mutableStateOf<List<String>>(emptyList())
+        private set
 
     val transportStates = transportRegistry.states()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    init {
+        refreshConnections()
+    }
+
+    fun refreshConnections() {
+        connectionPermissions = capabilityDetector.refresh().missingPermissions
+        transportRuntime.startAll()
+    }
 
     fun importInvitation(raw: String) {
         if (raw.isBlank()) return
@@ -242,7 +274,12 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 }
             }
             composable(AppRoute.EnableConnections.route) {
-                EnableConnectionsScreen { navController.navigate(AppRoute.IdentityReady.route) }
+                EnableConnectionsScreen(
+                    transportStates = viewModel.transportStates,
+                    missingPermissions = viewModel.connectionPermissions,
+                    onPermissionsChanged = viewModel::refreshConnections,
+                    onEnable = { navController.navigate(AppRoute.IdentityReady.route) }
+                )
             }
             composable(AppRoute.IdentityReady.route) {
                 val id = viewModel.identity
@@ -297,7 +334,9 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                     onFindNearby = connectViewModel::findNearby,
                     statusMessage = connectViewModel.status,
                     nearbyStatus = connectViewModel.nearbyStatus,
-                    transportStates = connectViewModel.transportStates
+                    transportStates = connectViewModel.transportStates,
+                    missingPermissions = connectViewModel.connectionPermissions,
+                    onPermissionsChanged = connectViewModel::refreshConnections
                 )
             }
             composable(AppRoute.Settings.route) {

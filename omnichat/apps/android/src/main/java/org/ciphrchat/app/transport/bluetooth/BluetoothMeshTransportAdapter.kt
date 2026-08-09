@@ -63,7 +63,8 @@ class BluetoothMeshTransportAdapter @Inject constructor(
         }
         val direct = bluetoothTransportAdapter.start()
         if (direct.isFailure) {
-            _state.value = TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, "Bluetooth access is required for mesh routing")
+            val directState = bluetoothTransportAdapter.state.value
+            _state.value = TransportState(kind, directState.availability, directState.detail)
             return direct
         }
         if (!started) {

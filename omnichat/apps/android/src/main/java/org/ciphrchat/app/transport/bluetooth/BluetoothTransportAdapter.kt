@@ -67,10 +67,10 @@ class BluetoothTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
             return Result.failure(error)
         }
-        val adStarted = bleAdvertiser.start()
-        val scanStarted = bleScanner.start()
-        gattServerManager.start()
-        if (adStarted || scanStarted) {
+        val adStarted = runCatching { bleAdvertiser.start() }.getOrDefault(false)
+        val scanStarted = runCatching { bleScanner.start() }.getOrDefault(false)
+        val serverStarted = runCatching { gattServerManager.start() }.getOrDefault(false)
+        if (serverStarted && (adStarted || scanStarted)) {
             started = true
             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
             return Result.success(Unit)
@@ -268,12 +268,18 @@ class BluetoothTransportAdapter @Inject constructor(
     }
 
     private fun hasBluetoothPermissions(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-        return listOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        ).all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            )
+        } else {
+            listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        return permissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private suspend fun discoveryTokenFor(recipientId: String): String {

@@ -60,10 +60,12 @@ class WifiDirectManager @Inject constructor(
     }
 
     fun start(): Boolean {
+        if (receiver != null && channel != null) return true
         if (manager == null || !hasNearbyPermission()) return false
-        channel = manager?.initialize(context, context.mainLooper, null)
+        channel = runCatching { manager?.initialize(context, context.mainLooper, null) }.getOrNull()
+            ?: return false
 
-        receiver = object : BroadcastReceiver() {
+        val activeReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.action) {
                     WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
@@ -80,12 +82,25 @@ class WifiDirectManager @Inject constructor(
                 }
             }
         }
-        context.registerReceiver(receiver, intentFilter)
+        receiver = activeReceiver
+        val registered = runCatching {
+            ContextCompat.registerReceiver(
+                context,
+                activeReceiver,
+                intentFilter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        }.isSuccess
+        if (!registered) {
+            receiver = null
+            channel = null
+            return false
+        }
 
-        manager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
+        runCatching { manager?.discoverPeers(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {}
             override fun onFailure(reasonCode: Int) {}
-        })
+        }) }.onFailure { stop() }
         return true
     }
 
@@ -95,6 +110,7 @@ class WifiDirectManager @Inject constructor(
             receiver = null
         }
         manager?.stopPeerDiscovery(channel, null)
+        channel = null
     }
 
     fun connect(deviceAddress: String, onResult: (Boolean) -> Unit) {

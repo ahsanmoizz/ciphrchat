@@ -1,7 +1,5 @@
 package org.ciphrchat.app.ui.screens
 
-import android.Manifest
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -14,24 +12,31 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import org.ciphrchat.app.BuildConfig
+import kotlinx.coroutines.flow.StateFlow
+import org.ciphrchat.app.transport.TransportAvailability
+import org.ciphrchat.app.transport.TransportKind
+import org.ciphrchat.app.transport.TransportState
 import org.ciphrchat.app.ui.components.CiphrPrimaryButton
 import org.ciphrchat.app.ui.components.CiphrTransportRow
 import org.ciphrchat.app.ui.theme.*
 
 @Composable
 fun EnableConnectionsScreen(
+    transportStates: StateFlow<List<TransportState>>,
+    missingPermissions: List<String>,
+    onPermissionsChanged: () -> Unit,
     onEnable: () -> Unit
 ) {
     var permissionMessage by remember { mutableStateOf<String?>(null) }
     val scrollState = rememberScrollState()
-    val relayConfigured = BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isNotBlank()
+    val states by transportStates.collectAsState()
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
@@ -39,26 +44,10 @@ fun EnableConnectionsScreen(
         permissionMessage = if (denied.isEmpty()) {
             "Available connection permissions granted"
         } else {
-            "Some nearby permissions were denied; Internet messaging still works when configured"
+            "Some connection permissions were denied. You can grant them later from Connect."
         }
+        onPermissionsChanged()
         onEnable()
-    }
-    val nearbyPermissions = remember {
-        buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-                add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-                add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            }
-            add(Manifest.permission.RECORD_AUDIO)
-            add(Manifest.permission.CAMERA)
-        }.toTypedArray()
     }
     Column(
         modifier = Modifier
@@ -87,26 +76,21 @@ fun EnableConnectionsScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        CiphrTransportRow(
-            Icons.Default.Public,
-            "Internet",
-            if (relayConfigured) "Secure messaging ready" else "Unavailable in this build",
-            if (relayConfigured) CiphrSuccess else CiphrDanger
-        )
+        CapabilityRow(states, TransportKind.INTERNET_DIRECT, Icons.Default.Public, "Internet")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Wifi, "Wi-Fi and Wi-Fi Direct", "Nearby permission", CiphrWarning)
+        CapabilityRow(states, TransportKind.WIFI_DIRECT, Icons.Default.Wifi, "Wi-Fi and Wi-Fi Direct")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Bluetooth, "Bluetooth direct", "Nearby permission", CiphrWarning)
+        CapabilityRow(states, TransportKind.BLUETOOTH_DIRECT, Icons.Default.Bluetooth, "Bluetooth direct")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.WifiTethering, "Wi-Fi Aware", "Compatible devices", CiphrTextSecondary)
+        CapabilityRow(states, TransportKind.WIFI_AWARE, Icons.Default.WifiTethering, "Wi-Fi Aware")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.GraphicEq, "Nearby audio", "Secure short-range data; microphone permission", CiphrWarning)
+        CapabilityRow(states, TransportKind.ULTRASOUND, Icons.Default.GraphicEq, "Nearby audio")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.Nfc, "NFC", "Tap phones to open a live encrypted transfer", CiphrTextSecondary)
+        CapabilityRow(states, TransportKind.NFC_PAIRING, Icons.Default.Nfc, "NFC")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.RadioButtonChecked, "UWB", "Proximity-assisted delivery on supported devices", CiphrTextSecondary)
+        CapabilityRow(states, TransportKind.UWB_ASSIST, Icons.Default.RadioButtonChecked, "UWB")
         HorizontalDivider(color = CiphrBorder)
-        CiphrTransportRow(Icons.Default.SettingsRemote, "Infrared", "Camera + IR emitter on both phones", CiphrTextSecondary)
+        CapabilityRow(states, TransportKind.INFRARED, Icons.Default.SettingsRemote, "Infrared")
 
         permissionMessage?.let {
             Spacer(Modifier.height(12.dp))
@@ -118,11 +102,29 @@ fun EnableConnectionsScreen(
         CiphrPrimaryButton(
             text = "Continue",
             onClick = {
-                if (nearbyPermissions.isEmpty()) onEnable()
-                else permissionLauncher.launch(nearbyPermissions)
+                if (missingPermissions.isEmpty()) onEnable()
+                else permissionLauncher.launch(missingPermissions.toTypedArray())
             }
         )
 
         Spacer(Modifier.height(40.dp))
     }
+}
+
+@Composable
+private fun CapabilityRow(
+    states: List<TransportState>,
+    kind: TransportKind,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    name: String
+) {
+    val state = states.firstOrNull { it.kind == kind }
+    val availability = state?.availability ?: TransportAvailability.STARTING
+    val color = when (availability) {
+        TransportAvailability.AVAILABLE -> CiphrSuccess
+        TransportAvailability.PERMISSION_REQUIRED, TransportAvailability.STARTING -> CiphrWarning
+        TransportAvailability.ERROR -> CiphrDanger
+        else -> CiphrTextSecondary
+    }
+    CiphrTransportRow(icon, name, state?.detail ?: "Checking this device…", color)
 }

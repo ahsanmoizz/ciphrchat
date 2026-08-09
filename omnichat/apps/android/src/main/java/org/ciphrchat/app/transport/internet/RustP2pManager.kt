@@ -22,19 +22,25 @@ sealed interface RustNetworkEvent {
 class RustP2pManager @Inject constructor(
     private val peerKeyStore: PeerKeyStore
 ) {
+    private val libraryLoaded: Boolean
     private val _events = MutableSharedFlow<RustNetworkEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<RustNetworkEvent> = _events.asSharedFlow()
 
     init {
         active = this
-        try {
+        libraryLoaded = try {
             System.loadLibrary("ciphrchat_ffi")
+            true
         } catch (error: UnsatisfiedLinkError) {
             Log.e(TAG, "Failed to load ciphrchat_ffi native library", error)
+            false
         }
     }
 
     fun startSwarm(relayAddress: String = BuildConfig.CIPHRCHAT_RELAY_ADDRESS): Result<Unit> {
+        if (!libraryLoaded) {
+            return Result.failure(IllegalStateException("Secure network engine is unavailable on this device ABI"))
+        }
         if (relayAddress.isBlank()) {
             return Result.failure(IllegalStateException("No CiphrChat relay address is configured"))
         }
@@ -48,13 +54,13 @@ class RustP2pManager @Inject constructor(
         }
     }
 
-    fun connectPeer(peerId: String, address: String): Boolean =
-        nativeConnectPeer(peerId, address)
+    fun connectPeer(peerId: String, address: String): Boolean = libraryLoaded &&
+        runCatching { nativeConnectPeer(peerId, address) }.getOrDefault(false)
 
-    fun sendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean =
-        nativeSendMessage(peerId, messageId, payload)
+    fun sendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean = libraryLoaded &&
+        runCatching { nativeSendMessage(peerId, messageId, payload) }.getOrDefault(false)
 
-    fun localPeerId(): String? = nativeLocalPeerId()?.toString()
+    fun localPeerId(): String? = if (libraryLoaded) runCatching { nativeLocalPeerId() }.getOrNull() else null
 
     private external fun nativeStartSwarm(relayAddress: String, keyFile: String): Boolean
     private external fun nativeConnectPeer(peerId: String, address: String): Boolean

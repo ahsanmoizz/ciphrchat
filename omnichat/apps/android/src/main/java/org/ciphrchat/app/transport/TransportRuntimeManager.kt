@@ -12,7 +12,8 @@ import javax.inject.Singleton
 /** Keeps every supported transport alive while the application process is alive. */
 @Singleton
 class TransportRuntimeManager @Inject constructor(
-    private val registry: TransportRegistry
+    private val registry: TransportRegistry,
+    private val capabilityDetector: AndroidCapabilityDetector
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startMutex = Mutex()
@@ -20,8 +21,13 @@ class TransportRuntimeManager @Inject constructor(
     fun startAll() {
         scope.launch {
             startMutex.withLock {
+                val snapshot = capabilityDetector.refresh()
                 registry.all().forEach { adapter ->
-                    runCatching { adapter.start() }
+                    if (snapshot.assessment(adapter.kind).canStart) {
+                        runCatching { adapter.start() }
+                    } else {
+                        runCatching { adapter.stop() }
+                    }
                 }
             }
         }

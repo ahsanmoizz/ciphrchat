@@ -25,21 +25,16 @@ class BleAdvertiser @Inject constructor(
     }
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
-    private val adapter = bluetoothManager?.adapter
-    private val advertiser = adapter?.bluetoothLeAdvertiser
+    private val advertiser get() = bluetoothManager?.adapter?.bluetoothLeAdvertiser
     private var isAdvertising = false
 
     private var advertiseCallback: AdvertiseCallback? = null
 
     suspend fun start(): Boolean {
         val identity = identityRepository.current() ?: return false
+        val activeAdvertiser = runCatching { advertiser }.getOrNull() ?: return false
 
         return suspendCoroutine { cont ->
-        if (advertiser == null) {
-            cont.resume(false)
-            return@suspendCoroutine
-        }
-
         if (isAdvertising) {
             cont.resume(true)
             return@suspendCoroutine
@@ -72,14 +67,20 @@ class BleAdvertiser @Inject constructor(
             }
         }
 
-        advertiser.startAdvertising(settings, data, advertiseCallback)
+        runCatching { activeAdvertiser.startAdvertising(settings, data, advertiseCallback) }
+            .onFailure {
+                advertiseCallback = null
+                isAdvertising = false
+                cont.resume(false)
+            }
         }
     }
 
     fun stop() {
-        if (!isAdvertising || advertiser == null) return
+        if (!isAdvertising) return
+        val activeAdvertiser = runCatching { advertiser }.getOrNull()
         advertiseCallback?.let {
-            advertiser.stopAdvertising(it)
+            runCatching { activeAdvertiser?.stopAdvertising(it) }
             isAdvertising = false
         }
         advertiseCallback = null

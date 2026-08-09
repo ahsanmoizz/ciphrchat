@@ -8,15 +8,16 @@ import dagger.hilt.android.AndroidEntryPoint
 import org.ciphrchat.app.app.CiphrChatApp
 import org.ciphrchat.app.ui.theme.CiphrChatTheme
 import org.ciphrchat.app.transport.nfc.NfcTransportCoordinator
+import org.ciphrchat.app.transport.AndroidCapabilityDetector
+import org.ciphrchat.app.transport.TransportKind
 import org.ciphrchat.app.transport.TransportRuntimeManager
-import org.ciphrchat.app.transport.infrared.InfraredCameraReceiver
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var nfcCoordinator: NfcTransportCoordinator
     @Inject lateinit var transportRuntime: TransportRuntimeManager
-    @Inject lateinit var infraredReceiver: InfraredCameraReceiver
+    @Inject lateinit var capabilityDetector: AndroidCapabilityDetector
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,14 +31,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        infraredReceiver.attach(this)
+        val capabilities = capabilityDetector.refresh()
         transportRuntime.startAll()
-        nfcCoordinator.attach(this)
+        if (capabilities.assessment(TransportKind.NFC_PAIRING).canStart) {
+            runCatching { nfcCoordinator.attach(this) }
+        }
     }
 
     override fun onPause() {
-        infraredReceiver.detach()
-        nfcCoordinator.detach(this)
+        runCatching { nfcCoordinator.detach(this) }
         super.onPause()
     }
 }

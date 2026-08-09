@@ -61,12 +61,13 @@ class WifiAwareService @Inject constructor(
             cont.resume(true)
             return@suspendCancellableCoroutine
         }
-        if (awareManager == null || !awareManager.isAvailable) {
+        val activeManager = awareManager
+        if (activeManager == null || !runCatching { activeManager.isAvailable }.getOrDefault(false)) {
             cont.resume(false)
             return@suspendCancellableCoroutine
         }
 
-        awareManager.attach(object : AttachCallback() {
+        runCatching { activeManager.attach(object : AttachCallback() {
             override fun onAttached(session: WifiAwareSession) {
                 awareSession = session
                 startPublishing()
@@ -77,7 +78,7 @@ class WifiAwareService @Inject constructor(
             override fun onAttachFailed() {
                 if (cont.isActive) cont.resume(false)
             }
-        }, null)
+        }, null) }.onFailure { if (cont.isActive) cont.resume(false) }
     }
 
     private fun startPublishing() {
@@ -89,11 +90,11 @@ class WifiAwareService @Inject constructor(
                 .setServiceSpecificInfo(identity.publicId.toByteArray(Charsets.UTF_8))
                 .build()
 
-            awareSession?.publish(config, object : DiscoverySessionCallback() {
+            runCatching { awareSession?.publish(config, object : DiscoverySessionCallback() {
                 override fun onPublishStarted(session: PublishDiscoverySession) {
                     publishSession = session
                 }
-            }, null)
+            }, null) }
         }
     }
 
@@ -102,7 +103,7 @@ class WifiAwareService @Inject constructor(
             .setServiceName(SERVICE_NAME)
             .build()
 
-        awareSession?.subscribe(config, object : DiscoverySessionCallback() {
+        runCatching { awareSession?.subscribe(config, object : DiscoverySessionCallback() {
             override fun onSubscribeStarted(session: SubscribeDiscoverySession) {
                 subscribeSession = session
             }
@@ -132,7 +133,7 @@ class WifiAwareService @Inject constructor(
                     DiscoveredPeer(id, "Aware Peer", TransportKind.WIFI_AWARE, 80, System.currentTimeMillis())
                 }
             }
-        }, null)
+        }, null) }
     }
 
     suspend fun startPublisherNetwork(port: Int): Boolean {
@@ -180,9 +181,9 @@ class WifiAwareService @Inject constructor(
         publisherNetworkCallback?.let { runCatching { connectivityManager.unregisterNetworkCallback(it) } }
         publisherNetworkCallback = null
         publisherNetwork = null
-        publishSession?.close()
-        subscribeSession?.close()
-        awareSession?.close()
+        runCatching { publishSession?.close() }
+        runCatching { subscribeSession?.close() }
+        runCatching { awareSession?.close() }
         publishSession = null
         subscribeSession = null
         awareSession = null

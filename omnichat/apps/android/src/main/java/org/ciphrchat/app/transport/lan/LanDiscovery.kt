@@ -29,6 +29,7 @@ class LanDiscovery @Inject constructor(
     private var discoveryListener: NsdManager.DiscoveryListener? = null
 
     suspend fun start(port: Int): Result<Unit> = runCatching {
+        if (registrationListener != null && discoveryListener != null) return@runCatching
         val identity = identityRepository.current() ?: throw IllegalStateException("No identity")
         
         val serviceInfo = NsdServiceInfo().apply {
