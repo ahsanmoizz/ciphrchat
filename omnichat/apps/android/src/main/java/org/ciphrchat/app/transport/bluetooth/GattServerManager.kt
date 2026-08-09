@@ -48,9 +48,9 @@ class GattServerManager @Inject constructor(
 
     fun start(): Boolean {
         if (started && gattServer != null) return true
-        if (bluetoothManager == null) return false
+        val manager = bluetoothManager ?: return false
 
-        gattServer = runCatching { bluetoothManager.openGattServer(context, gattServerCallback) }.getOrNull()
+        gattServer = runCatching { manager.openGattServer(context, gattServerCallback) }.getOrNull()
             ?: return false
         
         val service = BluetoothGattService(GATT_SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
