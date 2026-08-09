@@ -1,7 +1,6 @@
 package org.ciphrchat.app.transport.internet
 
 import org.ciphrchat.app.transport.OutboundEnvelope
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,7 +29,6 @@ class InternetWireCodecTest {
         assertTrue(json.contains("\"senderInvitation\":\"{\\\"format\\\":\\\"ciphrchat-invitation\\\""))
         assertTrue(json.contains("\"encryptedPayload\":\""))
         assertTrue(json.contains("\"wireType\":\"message\""))
-        assertEquals(1, json.count { it == '{' })
     }
 
     @Test
