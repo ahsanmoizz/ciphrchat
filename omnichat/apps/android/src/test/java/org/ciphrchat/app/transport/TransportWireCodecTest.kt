@@ -27,15 +27,25 @@ class TransportWireCodecTest {
         assertEquals(original.hopLimit, decoded.hopLimit)
         assertFalse(decoded.testOnly)
         assertArrayEquals(original.encryptedPayload, decoded.encryptedPayload)
+        assertEquals(original.senderInvitation, decoded.senderInvitation)
     }
 
     @Test
     fun unsupportedProtocolVersionIsRejected() {
         assertThrows(IllegalArgumentException::class.java) {
             TransportWireCodec.read(
-                DataInputStream(ByteArrayInputStream(encode(envelope(protocolVersion = 2))))
+                DataInputStream(ByteArrayInputStream(encode(envelope(protocolVersion = 3))))
             )
         }
+    }
+
+    @Test
+    fun legacyVersionOneStillDecodesWithoutReciprocalInvitation() {
+        val decoded = TransportWireCodec.read(
+            DataInputStream(ByteArrayInputStream(encode(envelope(protocolVersion = 1))))
+        )
+
+        assertEquals("", decoded.senderInvitation)
     }
 
     @Test
@@ -60,7 +70,7 @@ class TransportWireCodecTest {
     }
 
     private fun envelope(
-        protocolVersion: Int = 1,
+        protocolVersion: Int = 2,
         hopLimit: Int = 3,
         payload: ByteArray = byteArrayOf(1, 2, 3, 4)
     ) = OutboundEnvelope(
@@ -72,6 +82,7 @@ class TransportWireCodecTest {
         expiresAtEpochMs = 1_700_000_604_800_000,
         hopLimit = hopLimit,
         encryptedPayload = payload,
-        testOnly = false
+        testOnly = false,
+        senderInvitation = "{\"format\":\"ciphrchat-invitation\"}"
     )
 }

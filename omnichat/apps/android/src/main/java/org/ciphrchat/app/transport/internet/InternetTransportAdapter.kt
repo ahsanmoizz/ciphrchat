@@ -40,13 +40,17 @@ class InternetTransportAdapter @Inject constructor(
             return Result.failure(error)
         }
         val result = rustP2pManager.startSwarm()
-        result.onSuccess {
+        val readyResult = result.fold(
+            onSuccess = { rustP2pManager.awaitRelayReservation() },
+            onFailure = { Result.failure(it) }
+        )
+        readyResult.onSuccess {
             started = true
-            _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.AVAILABLE, "Rust libp2p relay client running")
+            _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.AVAILABLE, "Secure relay connected")
         }.onFailure { error ->
             _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.ERROR, error.message ?: "Unable to start relay client")
         }
-        return result
+        return readyResult
     }
 
     override suspend fun stop(): Result<Unit> {
@@ -69,8 +73,13 @@ class InternetTransportAdapter @Inject constructor(
                 )
             }
         }
-        return if (contacts.find(recipientId) != null) Reachability.Reachable
-        else Reachability.Unreachable("Contact has no Internet invitation")
+        val contact = contacts.find(recipientId)
+            ?: return Reachability.Unreachable("Contact has no Internet invitation")
+        return if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
+            Reachability.Reachable
+        } else {
+            Reachability.Unreachable("Contact invitation has no Internet peer address")
+        }
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
@@ -82,15 +91,21 @@ class InternetTransportAdapter @Inject constructor(
         }
         val contact = contacts.find(envelope.recipientId)
             ?: return SendResult.Rejected("Contact has not been paired")
+        if (contact.relayAddress.isBlank() || contact.peerId.startsWith("local:")) {
+            return SendResult.Rejected("Contact invitation does not contain an Internet route")
+        }
         if (!rustP2pManager.connectPeer(contact.peerId, contact.relayAddress)) {
             return SendResult.Failed(IllegalStateException("Peer address was rejected by the native network"))
         }
         val payload = InternetWireCodec.encode(envelope)
-        return if (rustP2pManager.sendMessage(contact.peerId, envelope.messageId, payload)) {
-            SendResult.Accepted(kind, "native-request-queued")
-        } else {
-            SendResult.Failed(IllegalStateException("Peer address is not registered or native transport is stopped"))
-        }
+        return rustP2pManager.sendMessageAwaitingDelivery(
+            contact.peerId,
+            envelope.messageId,
+            payload
+        ).fold(
+            onSuccess = { SendResult.Accepted(kind, "remote-network-ack") },
+            onFailure = { SendResult.Failed(it) }
+        )
     }
 
 }

@@ -13,7 +13,9 @@ object TransportWireCodec {
         val messageId = envelope.messageId.toByteArray(Charsets.UTF_8)
         val recipientId = envelope.recipientId.toByteArray(Charsets.UTF_8)
         val senderId = envelope.senderId.toByteArray(Charsets.UTF_8)
+        val senderInvitation = envelope.senderInvitation.toByteArray(Charsets.UTF_8)
         require(messageId.size <= MAX_FIELD_BYTES && recipientId.size <= MAX_FIELD_BYTES && senderId.size <= MAX_FIELD_BYTES)
+        require(senderInvitation.size <= MAX_INVITATION_BYTES)
         require(envelope.encryptedPayload.size <= MAX_PAYLOAD_BYTES)
         output.writeInt(MAGIC)
         output.writeInt(envelope.protocolVersion)
@@ -25,6 +27,7 @@ object TransportWireCodec {
         output.writeInt(envelope.hopLimit)
         output.writeBoolean(envelope.testOnly)
         writeField(output, envelope.encryptedPayload)
+        if (envelope.protocolVersion >= 2) writeField(output, senderInvitation)
     }
 
     fun read(input: DataInput): OutboundEnvelope {
@@ -38,10 +41,24 @@ object TransportWireCodec {
         val hopLimit = input.readInt()
         val testOnly = input.readBoolean()
         val payload = readField(input, MAX_PAYLOAD_BYTES)
-        require(protocolVersion == 1) { "Unsupported CiphrChat local transport version" }
+        val senderInvitation = if (protocolVersion >= 2) {
+            readField(input, MAX_INVITATION_BYTES).toString(Charsets.UTF_8)
+        } else ""
+        require(protocolVersion in 1..2) { "Unsupported CiphrChat local transport version" }
         require(hopLimit in 0..16) { "Invalid local transport hop limit" }
         require(messageId.isNotBlank() && recipientId.isNotBlank() && senderId.isNotBlank()) { "Incomplete CiphrChat envelope" }
-        return OutboundEnvelope(protocolVersion, messageId, recipientId, senderId, createdAt, expiresAt, hopLimit, payload, testOnly)
+        return OutboundEnvelope(
+            protocolVersion,
+            messageId,
+            recipientId,
+            senderId,
+            createdAt,
+            expiresAt,
+            hopLimit,
+            payload,
+            testOnly,
+            senderInvitation
+        )
     }
 
     private fun writeField(output: DataOutput, value: ByteArray) {
@@ -54,4 +71,6 @@ object TransportWireCodec {
         require(length in 0..maxBytes) { "Invalid local transport frame length" }
         return ByteArray(length).also(input::readFully)
     }
+
+    private const val MAX_INVITATION_BYTES = 32 * 1024
 }

@@ -9,16 +9,16 @@ class AutomaticRouter @Inject constructor(
     private val capabilityDetector: AndroidCapabilityDetector
 ) {
     private val priority = listOf(
-        TransportKind.INTERNET_DIRECT,
         TransportKind.WIFI_LAN,
         TransportKind.WIFI_AWARE,
-        TransportKind.WIFI_DIRECT,
         TransportKind.BLUETOOTH_DIRECT,
+        TransportKind.UWB_ASSIST,
+        TransportKind.INTERNET_DIRECT,
         TransportKind.BLUETOOTH_MESH,
+        TransportKind.WIFI_DIRECT,
         TransportKind.ULTRASOUND,
         TransportKind.INFRARED,
         TransportKind.NFC_PAIRING,
-        TransportKind.UWB_ASSIST,
         TransportKind.INTERNET_RELAY
     )
 

@@ -56,6 +56,12 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE status = :status")
     suspend fun getMessagesByStatus(status: MessageStatus): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE status = 'QUEUED' OR (status = 'SENT' AND selectedTransport = 'INTERNET_DIRECT')")
+    suspend fun getMessagesPendingDelivery(): List<MessageEntity>
+
+    @Query("UPDATE messages SET status = 'QUEUED' WHERE status = 'FAILED'")
+    suspend fun requeueFailedMessages(): Int
     
     @Query("SELECT COUNT(*) FROM messages")
     suspend fun countMessages(): Int

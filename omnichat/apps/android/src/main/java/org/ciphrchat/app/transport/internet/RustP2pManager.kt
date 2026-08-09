@@ -4,6 +4,9 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.security.PeerKeyStore
 import javax.inject.Inject
@@ -25,6 +28,8 @@ class RustP2pManager @Inject constructor(
     private val libraryLoaded: Boolean
     private val _events = MutableSharedFlow<RustNetworkEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<RustNetworkEvent> = _events.asSharedFlow()
+    private val relayReservationReady = MutableStateFlow(false)
+    private val deliveryAwaiter = DeliveryAwaiter()
 
     init {
         active = this
@@ -57,8 +62,33 @@ class RustP2pManager @Inject constructor(
     fun connectPeer(peerId: String, address: String): Boolean = libraryLoaded &&
         runCatching { nativeConnectPeer(peerId, address) }.getOrDefault(false)
 
-    fun sendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean = libraryLoaded &&
+    private fun queueMessage(peerId: String, messageId: String, payload: ByteArray): Boolean = libraryLoaded &&
         runCatching { nativeSendMessage(peerId, messageId, payload) }.getOrDefault(false)
+
+    suspend fun awaitRelayReservation(timeoutMs: Long = 20_000L): Result<Unit> {
+        if (!libraryLoaded) return Result.failure(
+            IllegalStateException("Secure network engine is unavailable on this device ABI")
+        )
+        if (relayReservationReady.value) return Result.success(Unit)
+        val ready = withTimeoutOrNull(timeoutMs) { relayReservationReady.first { it } } == true
+        return if (ready) Result.success(Unit) else Result.failure(
+            IllegalStateException("Secure relay connection timed out")
+        )
+    }
+
+    suspend fun sendMessageAwaitingDelivery(
+        peerId: String,
+        messageId: String,
+        payload: ByteArray,
+        timeoutMs: Long = 40_000L
+    ): Result<Unit> {
+        return deliveryAwaiter.await(messageId, timeoutMs) {
+            queueMessage(peerId, messageId, payload)
+        }
+    }
+
+    fun sendControlMessage(peerId: String, messageId: String, payload: ByteArray): Boolean =
+        queueMessage(peerId, messageId, payload)
 
     fun localPeerId(): String? = if (libraryLoaded) runCatching { nativeLocalPeerId() }.getOrNull() else null
 
@@ -80,7 +110,10 @@ class RustP2pManager @Inject constructor(
 
         @JvmStatic
         fun onRelayReservationReady(relayPeerId: String) {
-            active?._events?.tryEmit(RustNetworkEvent.RelayReservationReady(relayPeerId))
+            active?.let { manager ->
+                manager.relayReservationReady.value = true
+                manager._events.tryEmit(RustNetworkEvent.RelayReservationReady(relayPeerId))
+            }
         }
 
         @JvmStatic
@@ -90,12 +123,18 @@ class RustP2pManager @Inject constructor(
 
         @JvmStatic
         fun onDeliveryAccepted(peerId: String, messageId: String) {
-            active?._events?.tryEmit(RustNetworkEvent.DeliveryAccepted(peerId, messageId))
+            active?.let { manager ->
+                manager.deliveryAwaiter.accepted(messageId)
+                manager._events.tryEmit(RustNetworkEvent.DeliveryAccepted(peerId, messageId))
+            }
         }
 
         @JvmStatic
         fun onDeliveryFailed(peerId: String, messageId: String, reason: String) {
-            active?._events?.tryEmit(RustNetworkEvent.DeliveryFailed(peerId, messageId, reason))
+            active?.let { manager ->
+                manager.deliveryAwaiter.failed(messageId, reason)
+                manager._events.tryEmit(RustNetworkEvent.DeliveryFailed(peerId, messageId, reason))
+            }
         }
 
         @JvmStatic

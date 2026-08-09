@@ -8,6 +8,7 @@ object InternetWireCodec {
     fun encode(envelope: OutboundEnvelope): ByteArray = buildString {
         append('{')
         appendJsonString("protocolVersion").append(':').append(envelope.protocolVersion)
+        append(',').appendJsonString("wireType").append(':').appendJsonString("message")
         append(',').appendJsonString("messageId").append(':').appendJsonString(envelope.messageId)
         append(',').appendJsonString("recipientId").append(':').appendJsonString(envelope.recipientId)
         append(',').appendJsonString("senderId").append(':').appendJsonString(envelope.senderId)
@@ -15,8 +16,24 @@ object InternetWireCodec {
         append(',').appendJsonString("expiresAtEpochMs").append(':').append(envelope.expiresAtEpochMs)
         append(',').appendJsonString("hopLimit").append(':').append(envelope.hopLimit)
         append(',').appendJsonString("testOnly").append(':').append(envelope.testOnly)
+        append(',').appendJsonString("senderInvitation").append(':')
+            .appendJsonString(envelope.senderInvitation)
         append(',').appendJsonString("encryptedPayload").append(':')
             .appendJsonString(Base64.getEncoder().encodeToString(envelope.encryptedPayload))
+        append('}')
+    }.encodeToByteArray()
+
+    fun encodeDeliveryReceipt(
+        messageId: String,
+        senderId: String,
+        recipientId: String
+    ): ByteArray = buildString {
+        append('{')
+        appendJsonString("protocolVersion").append(':').append(2)
+        append(',').appendJsonString("wireType").append(':').appendJsonString("deliveryReceipt")
+        append(',').appendJsonString("messageId").append(':').appendJsonString(messageId)
+        append(',').appendJsonString("senderId").append(':').appendJsonString(senderId)
+        append(',').appendJsonString("recipientId").append(':').appendJsonString(recipientId)
         append('}')
     }.encodeToByteArray()
 

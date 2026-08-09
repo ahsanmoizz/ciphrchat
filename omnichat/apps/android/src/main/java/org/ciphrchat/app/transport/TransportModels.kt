@@ -109,7 +109,9 @@ data class OutboundEnvelope(
     val hopLimit: Int,
     val encryptedPayload: ByteArray,
     /** Any envelope created by mock crypto must set testOnly = true */
-    val testOnly: Boolean
+    val testOnly: Boolean,
+    /** Sender invitation allows a one-scan pairing to become reciprocal on first delivery. */
+    val senderInvitation: String = ""
 ) {
     /** Compatibility constructor for the original prototype message envelope. */
     constructor(
@@ -125,7 +127,8 @@ data class OutboundEnvelope(
         expiresAtEpochMs = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L,
         hopLimit = hopLimit,
         encryptedPayload = encryptedPayload,
-        testOnly = true
+        testOnly = true,
+        senderInvitation = ""
     )
 
     /** Compatibility property for socket transports that still consume a byte-array tag. */

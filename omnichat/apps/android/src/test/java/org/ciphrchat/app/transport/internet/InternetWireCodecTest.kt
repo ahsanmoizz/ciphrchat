@@ -17,7 +17,8 @@ class InternetWireCodecTest {
             expiresAtEpochMs = 200L,
             hopLimit = 3,
             encryptedPayload = byteArrayOf(1, 2, 3),
-            testOnly = false
+            testOnly = false,
+            senderInvitation = "{\"format\":\"ciphrchat-invitation\",\"displayName\":\"Alice\"}"
         )
 
         val json = InternetWireCodec.encode(envelope).toString(Charsets.UTF_8)
@@ -26,7 +27,23 @@ class InternetWireCodecTest {
         assertTrue(json.contains("\"messageId\":\"message-1\""))
         assertTrue(json.contains("\"hopLimit\":3"))
         assertTrue(json.contains("\"testOnly\":false"))
+        assertTrue(json.contains("\"senderInvitation\":\"{\\\"format\\\":\\\"ciphrchat-invitation\\\""))
         assertTrue(json.contains("\"encryptedPayload\":\""))
+        assertTrue(json.contains("\"wireType\":\"message\""))
         assertEquals(1, json.count { it == '{' })
+    }
+
+    @Test
+    fun deliveryReceiptIdentifiesBothAuthenticatedParties() {
+        val json = InternetWireCodec.encodeDeliveryReceipt(
+            messageId = "message-1",
+            senderId = "ciphr:bob",
+            recipientId = "ciphr:alice"
+        ).toString(Charsets.UTF_8)
+
+        assertTrue(json.contains("\"wireType\":\"deliveryReceipt\""))
+        assertTrue(json.contains("\"messageId\":\"message-1\""))
+        assertTrue(json.contains("\"senderId\":\"ciphr:bob\""))
+        assertTrue(json.contains("\"recipientId\":\"ciphr:alice\""))
     }
 }

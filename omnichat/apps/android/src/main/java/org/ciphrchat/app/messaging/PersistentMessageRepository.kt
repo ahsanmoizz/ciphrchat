@@ -12,6 +12,13 @@ import org.json.JSONObject
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import android.net.Uri
+import android.content.Context
+import androidx.work.BackoffPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import dagger.hilt.android.qualifiers.ApplicationContext
+import org.ciphrchat.app.worker.PendingMessageRetryWorker
 import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.MessageEntity
@@ -20,13 +27,17 @@ import org.ciphrchat.app.identity.InvitationCodec
 import org.ciphrchat.app.security.MessageContentCipher
 import org.ciphrchat.app.transport.internet.RustNetworkEvent
 import org.ciphrchat.app.transport.internet.RustP2pManager
+import org.ciphrchat.app.transport.internet.InternetWireCodec
 import org.ciphrchat.app.transport.AutomaticRouter
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
 import org.ciphrchat.app.transport.TransportInboundBus
 import org.ciphrchat.app.identity.IdentityRepository
+import org.ciphrchat.app.identity.InvitationService
+import org.ciphrchat.app.identity.ReciprocalPairingPolicy
 import org.whispersystems.libsignal.SignalProtocolAddress
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,7 +51,9 @@ class PersistentMessageRepository @Inject constructor(
     private val p2p: RustP2pManager,
     private val inboundBus: TransportInboundBus,
     private val identity: IdentityRepository,
-    private val attachmentStore: AttachmentStore
+    private val attachmentStore: AttachmentStore,
+    private val invitationService: InvitationService,
+    @ApplicationContext private val context: Context
 ) : MessageRepository {
 
     private val dao = database.messageDao()
@@ -48,11 +61,15 @@ class PersistentMessageRepository @Inject constructor(
 
     init {
         networkScope.launch {
+            dao.requeueFailedMessages()
+            if (dao.getMessagesPendingDelivery().isNotEmpty()) scheduleRetry()
+        }
+        networkScope.launch {
             p2p.events.collect { event ->
                 when (event) {
                     is RustNetworkEvent.MessageReceived -> receive(event.peerId, event.payload)
-                    is RustNetworkEvent.DeliveryAccepted -> updateDelivery(event.messageId, MessageStatus.DELIVERED)
-                    is RustNetworkEvent.DeliveryFailed -> updateDelivery(event.messageId, MessageStatus.FAILED)
+                    is RustNetworkEvent.DeliveryAccepted -> updateDelivery(event.messageId, MessageStatus.SENT)
+                    is RustNetworkEvent.DeliveryFailed -> updateDelivery(event.messageId, MessageStatus.QUEUED)
                     else -> Unit
                 }
             }
@@ -61,6 +78,9 @@ class PersistentMessageRepository @Inject constructor(
             inboundBus.events.collect { event -> receiveLocal(event.envelope) }
         }
     }
+
+    /** The repository starts its collectors during construction; this documents eager startup. */
+    fun ensureStarted() = Unit
 
     override fun conversations(): Flow<List<ConversationSummary>> = combine(
         dao.getAllMessages(),
@@ -152,6 +172,9 @@ class PersistentMessageRepository @Inject constructor(
     ): ChatMessage {
         val ciphertext = sessions.encryptMessage(address, plaintext)
         val localIdentity = identity.current()?.publicId ?: error("Local identity is unavailable")
+        val senderInvitation = invitationService.createInvitation().getOrElse {
+            throw IllegalStateException("Could not prepare your secure sender identity", it)
+        }
         val entity = MessageEntity(
             id = UUID.randomUUID().toString(),
             conversationId = conversationId,
@@ -172,7 +195,7 @@ class PersistentMessageRepository @Inject constructor(
         dao.insertMessage(entity)
 
         val envelope = OutboundEnvelope(
-            protocolVersion = 1,
+            protocolVersion = 2,
             messageId = entity.id,
             recipientId = recipientId,
             senderId = localIdentity,
@@ -180,29 +203,21 @@ class PersistentMessageRepository @Inject constructor(
             expiresAtEpochMs = entity.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
             hopLimit = 3,
             encryptedPayload = ciphertext.serialize(),
-            testOnly = false
+            testOnly = false,
+            senderInvitation = senderInvitation
         )
         val sendResult = router.route(envelope)
         val finalEntity = when (sendResult) {
-            is SendResult.Accepted -> entity.copy(status = MessageStatus.SENT, selectedTransport = sendResult.transport.name)
-            is SendResult.Rejected -> entity.copy(status = MessageStatus.QUEUED)
-            is SendResult.Failed -> entity.copy(status = MessageStatus.FAILED)
-            is SendResult.Failure -> entity.copy(status = MessageStatus.FAILED)
-            SendResult.Success -> entity.copy(status = MessageStatus.QUEUED)
+            is SendResult.Accepted -> entity.copy(
+                status = DeliveryStatusPolicy.statusFor(sendResult),
+                selectedTransport = sendResult.transport.name
+            )
+            else -> entity.copy(status = DeliveryStatusPolicy.statusFor(sendResult))
         }
         dao.updateMessage(finalEntity)
-        if (finalEntity.status == MessageStatus.FAILED || finalEntity.status == MessageStatus.QUEUED) {
-            val detail = when (val failure = sendResult) {
-                is SendResult.Rejected -> failure.reason
-                is SendResult.Failed -> failure.error.message
-                is SendResult.Failure -> failure.error.message
-                SendResult.Success -> "No transport verified delivery"
-                is SendResult.Accepted -> null
-            }
-            if (!detail.isNullOrBlank()) {
-                throw IllegalStateException("Message not delivered: $detail")
-            }
-        }
+        if (finalEntity.status == MessageStatus.QUEUED ||
+            finalEntity.status == MessageStatus.SENT && finalEntity.selectedTransport == "INTERNET_DIRECT"
+        ) scheduleRetry()
         return finalEntity.toModel()
     }
 
@@ -228,13 +243,22 @@ class PersistentMessageRepository @Inject constructor(
 
     private suspend fun receive(peerId: String, wirePayload: ByteArray) {
         runCatching {
-            val contact = contacts.findByPeerId(peerId) ?: return
             val envelope = JSONObject(wirePayload.toString(Charsets.UTF_8))
             val localId = identity.current()?.publicId ?: return
-            require(envelope.optInt("protocolVersion", 0) == 1) { "Unsupported Internet envelope version" }
+            require(envelope.optInt("protocolVersion", 0) in 1..2) { "Unsupported Internet envelope version" }
+            if (envelope.optString("wireType", "message") == "deliveryReceipt") {
+                receiveDeliveryReceipt(peerId, localId, envelope)
+                return@runCatching
+            }
+            require(envelope.optString("wireType", "message") == "message") { "Unsupported Internet wire type" }
             require(!envelope.optBoolean("testOnly", false)) { "Test-only envelope rejected" }
             require(envelope.optString("recipientId") == localId) { "Envelope recipient mismatch" }
-            require(envelope.optString("senderId") == contact.contactId) { "Envelope sender mismatch" }
+            val senderId = envelope.optString("senderId")
+            val contact = resolveInternetSender(
+                peerId = peerId,
+                senderId = senderId,
+                senderInvitation = envelope.optString("senderInvitation")
+            )
             val messageId = envelope.getString("messageId")
             require(messageId.isNotBlank()) { "Envelope message ID is missing" }
             val createdAt = envelope.optLong("createdAtEpochMs", 0L)
@@ -245,21 +269,90 @@ class PersistentMessageRepository @Inject constructor(
             val ciphertext = Base64.decode(envelope.getString("encryptedPayload"), Base64.NO_WRAP)
             require(ciphertext.isNotEmpty() && ciphertext.size <= 1_048_576) { "Invalid encrypted payload" }
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            if (dao.findById(messageId) != null) {
+                sendDeliveryReceipt(contact, messageId, localId)
+                return@runCatching
+            }
             val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
             persistIncoming(messageId, contact.contactId, ciphertext, plaintext, createdAt, "INTERNET_DIRECT")
+            sendDeliveryReceipt(contact, messageId, localId)
         }
+    }
+
+    private suspend fun receiveDeliveryReceipt(peerId: String, localId: String, receipt: JSONObject) {
+        require(receipt.optString("recipientId") == localId) { "Delivery receipt recipient mismatch" }
+        val contact = contacts.findByPeerId(peerId)
+            ?: error("Delivery receipt came from an unknown peer")
+        require(contact.contactId == receipt.optString("senderId")) { "Delivery receipt sender mismatch" }
+        val messageId = receipt.optString("messageId")
+        require(messageId.isNotBlank()) { "Delivery receipt message ID is missing" }
+        val message = dao.findById(messageId) ?: return
+        require(message.recipientId == contact.contactId) { "Delivery receipt does not match the recipient" }
+        dao.updateMessage(message.copy(status = MessageStatus.DELIVERED))
+    }
+
+    private fun sendDeliveryReceipt(
+        contact: org.ciphrchat.app.data.ContactEntity,
+        messageId: String,
+        localId: String
+    ) {
+        if (contact.relayAddress.isBlank() || contact.peerId.startsWith("local:")) return
+        if (!p2p.connectPeer(contact.peerId, contact.relayAddress)) return
+        p2p.sendControlMessage(
+            peerId = contact.peerId,
+            messageId = "receipt:$messageId",
+            payload = InternetWireCodec.encodeDeliveryReceipt(
+                messageId = messageId,
+                senderId = localId,
+                recipientId = contact.contactId
+            )
+        )
     }
 
     private suspend fun receiveLocal(envelope: OutboundEnvelope) {
         val localId = identity.current()?.publicId ?: return
-        if (envelope.testOnly || envelope.protocolVersion != 1 || envelope.recipientId != localId ||
+        if (envelope.testOnly || envelope.protocolVersion !in 1..2 || envelope.recipientId != localId ||
             envelope.expiresAtEpochMs < System.currentTimeMillis() || envelope.hopLimit !in 0..16) return
-        val contact = contacts.find(envelope.senderId) ?: return
         runCatching {
+            val contact = resolveLocalSender(envelope.senderId, envelope.senderInvitation)
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             val plaintext = sessions.decryptSerializedMessage(address, envelope.encryptedPayload)
             persistIncoming(envelope.messageId, contact.contactId, envelope.encryptedPayload, plaintext, envelope.createdAtEpochMs, "LOCAL")
         }
+    }
+
+    private suspend fun resolveInternetSender(
+        peerId: String,
+        senderId: String,
+        senderInvitation: String
+    ): org.ciphrchat.app.data.ContactEntity {
+        contacts.findByPeerId(peerId)?.let { existing ->
+            require(existing.contactId == senderId) { "Authenticated peer identity mismatch" }
+            return existing
+        }
+        require(senderInvitation.isNotBlank()) { "Unknown sender did not include a reciprocal invitation" }
+        val invited = ReciprocalPairingPolicy.validate(
+            senderId,
+            peerId,
+            InvitationCodec.decode(senderInvitation)
+        )
+        contacts.save(invited)
+        return invited
+    }
+
+    private suspend fun resolveLocalSender(
+        senderId: String,
+        senderInvitation: String
+    ): org.ciphrchat.app.data.ContactEntity {
+        contacts.find(senderId)?.let { return it }
+        require(senderInvitation.isNotBlank()) { "Unknown local sender did not include a reciprocal invitation" }
+        val invited = ReciprocalPairingPolicy.validate(
+            senderId,
+            null,
+            InvitationCodec.decode(senderInvitation)
+        )
+        contacts.save(invited)
+        return invited
     }
 
     private suspend fun persistIncoming(
@@ -301,6 +394,20 @@ class PersistentMessageRepository @Inject constructor(
     private suspend fun updateDelivery(messageId: String, status: MessageStatus) {
         if (messageId.isBlank()) return
         val message = dao.findById(messageId) ?: return
+        if (message.status == MessageStatus.DELIVERED) return
         dao.updateMessage(message.copy(status = status))
+        if (status == MessageStatus.QUEUED) scheduleRetry()
+    }
+
+    private fun scheduleRetry() {
+        val request = OneTimeWorkRequestBuilder<PendingMessageRetryWorker>()
+            .setInitialDelay(10, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "ciphrchat-pending-message-delivery",
+            ExistingWorkPolicy.KEEP,
+            request
+        )
     }
 }
