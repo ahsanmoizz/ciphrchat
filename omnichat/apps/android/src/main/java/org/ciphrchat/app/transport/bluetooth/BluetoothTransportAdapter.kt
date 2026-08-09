@@ -78,7 +78,8 @@ class BluetoothTransportAdapter @Inject constructor(
     }
 
     override suspend fun start(): Result<Unit> {
-        if (adapter == null) {
+        val activeAdapter = adapter
+        if (activeAdapter == null) {
             val error = IllegalStateException("Bluetooth is not available on this device")
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
             return Result.failure(error)
@@ -88,7 +89,7 @@ class BluetoothTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, error.message!!)
             return Result.failure(error)
         }
-        val enabled = runCatching { adapter.isEnabled }.getOrNull()
+        val enabled = runCatching { activeAdapter.isEnabled }.getOrNull()
         if (enabled == false) {
             val error = IllegalStateException("Bluetooth is disabled")
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
