@@ -37,7 +37,9 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
     }
 
     fun save(fileName: String, mimeType: String, bytes: ByteArray): Stored {
-        require(bytes.size in 1..MAX_ATTACHMENT_BYTES) { "Attachments must be between 1 byte and ${MAX_ATTACHMENT_BYTES / 1024} KiB" }
+        require(bytes.size in 1..MAX_ATTACHMENT_BYTES) {
+            "Attachments must be between 1 byte and ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MiB"
+        }
         val directory = File(context.filesDir, "CiphrChat/attachments").apply { mkdirs() }
         val target = File(directory, "${System.currentTimeMillis()}-${randomHex(12)}.bin")
         val iv = ByteArray(IV_BYTES).also(SecureRandom()::nextBytes)
@@ -112,7 +114,7 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
         while (true) {
             val count = read(buffer)
             if (count < 0) break
-            if (output.size() + count > maxBytes) error("Attachment exceeds ${maxBytes / 1024} KiB")
+            if (output.size() + count > maxBytes) error("Attachment exceeds ${maxBytes / (1024 * 1024)} MiB")
             output.write(buffer, 0, count)
         }
         return output.toByteArray()
@@ -122,7 +124,7 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
         .digest(bytes).joinToString("") { "%02x".format(it) }
 
     companion object {
-        const val MAX_ATTACHMENT_BYTES = 512 * 1024
+        const val MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
         const val IV_BYTES = 12
         const val KEY_ALIAS = "CiphrChatAttachmentKeyV2"
         const val LEGACY_KEY_ALIAS = "CiphrChatAttachmentKey"

@@ -42,6 +42,12 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.CiphrChat">
 
+        <!-- Allows low-bandwidth text delivery when Android exposes a carrier-managed
+             constrained satellite data network. This does not bypass the carrier. -->
+        <meta-data
+            android:name="android.telephony.PROPERTY_SATELLITE_DATA_OPTIMIZED"
+            android:value="${applicationId}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

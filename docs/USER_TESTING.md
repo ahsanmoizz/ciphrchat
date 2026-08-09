@@ -80,7 +80,7 @@ Use **Chats → contact → paperclip** and test these files one at a time:
 - a PDF or office document;
 - an arbitrary file with an uncommon extension.
 
-Each file must be 512 KiB or smaller in this build. The app preserves the file
+Each file must be 5 MiB or smaller in this build. The app preserves the file
 name and MIME type, encrypts the attachment inside the end-to-end message, and
 stores the local copy encrypted. Tap **Open attachment** on the receiving
 phone and confirm the correct application opens it and the file is usable.

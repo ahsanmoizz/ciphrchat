@@ -136,9 +136,10 @@ class InternetTransportAdapter @Inject constructor(
         return rustP2pManager.sendMessageAwaitingDelivery(
             contact.peerId,
             envelope.messageId,
-            payload
+            payload,
+            envelope.expiresAtEpochMs
         ).fold(
-            onSuccess = { SendResult.Accepted(kind, "remote-network-ack") },
+            onSuccess = { SendResult.Accepted(kind, "encrypted-internet-delivery") },
             onFailure = { SendResult.Failed(it) }
         )
     }

@@ -65,9 +65,9 @@ class BluetoothMeshTransportAdapter @Inject constructor(
                 _state.value = if (direct.availability != TransportAvailability.AVAILABLE) {
                     TransportState(kind, direct.availability, direct.detail)
                 } else if (peerCount == 0) {
-                    TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
+                    TransportState(kind, TransportAvailability.STARTING, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
                 } else {
-                    TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby peer${if (peerCount == 1) "" else "s"}")
+                    TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby CiphrChat peer${if (peerCount == 1) "" else "s"}")
                 }
             }
         }
@@ -102,9 +102,9 @@ class BluetoothMeshTransportAdapter @Inject constructor(
         }
         val peerCount = bluetoothTransportAdapter.nearbyPeers.value.size
         _state.value = if (peerCount == 0) {
-            TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
+            TransportState(kind, TransportAvailability.STARTING, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
         } else {
-            TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby peer${if (peerCount == 1) "" else "s"}")
+            TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby CiphrChat peer${if (peerCount == 1) "" else "s"}")
         }
         return Result.success(Unit)
     }

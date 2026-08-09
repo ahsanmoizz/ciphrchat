@@ -19,6 +19,11 @@ sealed interface RustNetworkEvent {
     data class SwarmReady(val peerId: String) : RustNetworkEvent
     data class RelayReservationReady(val relayPeerId: String) : RustNetworkEvent
     data class MessageReceived(val peerId: String, val payload: ByteArray) : RustNetworkEvent
+    data class MailboxMessageReceived(
+        val peerId: String,
+        val messageId: String,
+        val payload: ByteArray
+    ) : RustNetworkEvent
     data class DeliveryAccepted(val peerId: String, val messageId: String) : RustNetworkEvent
     data class DeliveryFailed(val peerId: String, val messageId: String, val reason: String) : RustNetworkEvent
     data class NetworkError(val detail: String) : RustNetworkEvent
@@ -69,8 +74,14 @@ class RustP2pManager @Inject constructor(
     fun connectPeer(peerId: String, address: String): Boolean = libraryLoaded &&
         runCatching { nativeConnectPeer(peerId, address) }.getOrDefault(false)
 
-    private fun queueMessage(peerId: String, messageId: String, payload: ByteArray): Boolean = libraryLoaded &&
-        runCatching { nativeSendMessage(peerId, messageId, payload) }.getOrDefault(false)
+    private fun queueMessage(
+        peerId: String,
+        messageId: String,
+        payload: ByteArray,
+        expiresAtEpochMs: Long
+    ): Boolean = libraryLoaded && runCatching {
+        nativeSendMessage(peerId, messageId, payload, expiresAtEpochMs)
+    }.getOrDefault(false)
 
     suspend fun awaitRelayReservation(timeoutMs: Long = 20_000L): Result<Unit> {
         if (!libraryLoaded) return Result.failure(
@@ -89,25 +100,41 @@ class RustP2pManager @Inject constructor(
         peerId: String,
         messageId: String,
         payload: ByteArray,
+        expiresAtEpochMs: Long,
         timeoutMs: Long = 40_000L
     ): Result<Unit> {
         return deliveryAwaiter.await(messageId, timeoutMs) {
-            queueMessage(peerId, messageId, payload)
+            queueMessage(peerId, messageId, payload, expiresAtEpochMs)
         }
     }
 
     fun sendControlMessage(peerId: String, messageId: String, payload: ByteArray): Boolean =
-        queueMessage(peerId, messageId, payload)
+        queueMessage(
+            peerId,
+            messageId,
+            payload,
+            System.currentTimeMillis() + MAILBOX_RETENTION_MS
+        )
+
+    fun acknowledgeMailbox(messageId: String): Boolean = libraryLoaded &&
+        runCatching { nativeAcknowledgeMailbox(messageId) }.getOrDefault(false)
 
     fun localPeerId(): String? = if (libraryLoaded) runCatching { nativeLocalPeerId() }.getOrNull() else null
 
     private external fun nativeStartSwarm(relayAddress: String, keyFile: String): Boolean
     private external fun nativeConnectPeer(peerId: String, address: String): Boolean
-    private external fun nativeSendMessage(peerId: String, messageId: String, payload: ByteArray): Boolean
+    private external fun nativeSendMessage(
+        peerId: String,
+        messageId: String,
+        payload: ByteArray,
+        expiresAtEpochMs: Long
+    ): Boolean
+    private external fun nativeAcknowledgeMailbox(messageId: String): Boolean
     private external fun nativeLocalPeerId(): String?
 
     companion object {
         private const val TAG = "RustP2pManager"
+        private const val MAILBOX_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
 
         @Volatile
         private var active: RustP2pManager? = null
@@ -128,6 +155,13 @@ class RustP2pManager @Inject constructor(
         @JvmStatic
         fun onMessageReceived(peerId: String, payload: ByteArray) {
             active?._events?.tryEmit(RustNetworkEvent.MessageReceived(peerId, payload))
+        }
+
+        @JvmStatic
+        fun onMailboxMessageReceived(peerId: String, messageId: String, payload: ByteArray) {
+            active?._events?.tryEmit(
+                RustNetworkEvent.MailboxMessageReceived(peerId, messageId, payload)
+            )
         }
 
         @JvmStatic

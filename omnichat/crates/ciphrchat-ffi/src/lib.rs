@@ -133,6 +133,31 @@ fn dispatch_event(jvm: &JavaVM, event: ClientEvent) {
                 );
             }
         }
+        ClientEvent::MailboxMessage {
+            peer_id,
+            message_id,
+            payload,
+        } => {
+            if let (Ok(peer_id), Ok(message_id), Ok(payload)) = (
+                env.new_string(peer_id.to_string()),
+                env.new_string(message_id),
+                env.byte_array_from_slice(&payload),
+            ) {
+                let peer_id_object: JObject<'_> = peer_id.into();
+                let message_id_object: JObject<'_> = message_id.into();
+                let payload_object: JObject<'_> = payload.into();
+                call_callback(
+                    &mut env,
+                    "onMailboxMessageReceived",
+                    "(Ljava/lang/String;Ljava/lang/String;[B)V",
+                    &[
+                        JValue::Object(&peer_id_object),
+                        JValue::Object(&message_id_object),
+                        JValue::Object(&payload_object),
+                    ],
+                );
+            }
+        }
         ClientEvent::DeliveryAccepted {
             peer_id,
             message_id,
@@ -317,6 +342,7 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
     peer_id: JString<'local>,
     message_id: JString<'local>,
     payload: JByteArray<'local>,
+    expires_at_epoch_ms: jni::sys::jlong,
 ) -> jboolean {
     let parsed_peer = jstring(&mut env, peer_id)
         .ok()
@@ -329,7 +355,26 @@ pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_
                 peer_id,
                 message_id,
                 payload,
+                expires_at_epoch_ms: expires_at_epoch_ms.max(0) as u64,
             })
+            .map(|_| 1)
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_ciphrchat_app_transport_internet_RustP2pManager_nativeAcknowledgeMailbox<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    message_id: JString<'local>,
+) -> jboolean {
+    let message_id = jstring(&mut env, message_id).ok();
+    match (command_sender(), message_id) {
+        (Some(sender), Some(message_id)) => sender
+            .send(SwarmCommand::AcknowledgeMailbox { message_id })
             .map(|_| 1)
             .unwrap_or(0),
         _ => 0,

@@ -9,6 +9,8 @@ use std::{collections::HashMap, error::Error, time::Duration};
 use tokio::sync::mpsc;
 
 const MESSAGE_PROTOCOL: &str = "/ciphrchat/message/1";
+const MAILBOX_PROTOCOL: &str = "/ciphrchat/mailbox/1";
+const MAILBOX_FETCH_LIMIT: u16 = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireMessage {
@@ -22,9 +24,44 @@ pub struct WireAcknowledgement {
 
 type MessageBehaviour = cbor::Behaviour<WireMessage, WireAcknowledgement>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MailboxRequest {
+    Put {
+        recipient_peer_id: String,
+        message_id: String,
+        payload: Vec<u8>,
+        expires_at_epoch_ms: u64,
+    },
+    Fetch {
+        limit: u16,
+    },
+    Ack {
+        message_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxMessage {
+    pub message_id: String,
+    pub sender_peer_id: String,
+    pub payload: Vec<u8>,
+    pub expires_at_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MailboxResponse {
+    Stored,
+    Messages(Vec<MailboxMessage>),
+    Acknowledged,
+    Rejected(String),
+}
+
+type MailboxBehaviour = cbor::Behaviour<MailboxRequest, MailboxResponse>;
+
 #[derive(NetworkBehaviour)]
 pub struct CiphrChatBehaviour {
     messages: MessageBehaviour,
+    mailbox: MailboxBehaviour,
     relay_client: relay::client::Behaviour,
     dcutr: dcutr::Behaviour,
     identify: identify::Behaviour,
@@ -39,6 +76,10 @@ pub enum SwarmCommand {
         peer_id: PeerId,
         message_id: String,
         payload: Vec<u8>,
+        expires_at_epoch_ms: u64,
+    },
+    AcknowledgeMailbox {
+        message_id: String,
     },
 }
 
@@ -52,6 +93,11 @@ pub enum ClientEvent {
     },
     InboundMessage {
         peer_id: PeerId,
+        payload: Vec<u8>,
+    },
+    MailboxMessage {
+        peer_id: PeerId,
+        message_id: String,
         payload: Vec<u8>,
     },
     DeliveryAccepted {
@@ -73,6 +119,78 @@ fn message_behaviour() -> MessageBehaviour {
         [(StreamProtocol::new(MESSAGE_PROTOCOL), ProtocolSupport::Full)],
         request_response::Config::default().with_request_timeout(Duration::from_secs(30)),
     )
+}
+
+fn mailbox_behaviour() -> MailboxBehaviour {
+    cbor::Behaviour::new(
+        [(
+            StreamProtocol::new(MAILBOX_PROTOCOL),
+            ProtocolSupport::Outbound,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(45)),
+    )
+}
+
+#[derive(Debug)]
+struct DeliveryTracker {
+    peer_id: PeerId,
+    direct_pending: bool,
+    mailbox_pending: bool,
+    failures: Vec<String>,
+}
+
+#[derive(Debug)]
+enum PendingMailboxRequest {
+    Put { message_id: String },
+    Fetch,
+    Ack,
+}
+
+fn relay_peer_id(address: &Multiaddr) -> Option<PeerId> {
+    address.iter().find_map(|protocol| match protocol {
+        libp2p::multiaddr::Protocol::P2p(peer_id) => Some(peer_id),
+        _ => None,
+    })
+}
+
+fn complete_delivery(
+    message_id: &str,
+    accepted: bool,
+    reason: Option<String>,
+    source_is_mailbox: bool,
+    deliveries: &mut HashMap<String, DeliveryTracker>,
+    events: &mpsc::UnboundedSender<ClientEvent>,
+) {
+    let Some(tracker) = deliveries.get_mut(message_id) else {
+        return;
+    };
+    if source_is_mailbox {
+        tracker.mailbox_pending = false;
+    } else {
+        tracker.direct_pending = false;
+    }
+    if accepted {
+        let peer_id = tracker.peer_id;
+        deliveries.remove(message_id);
+        let _ = events.send(ClientEvent::DeliveryAccepted {
+            peer_id,
+            message_id: message_id.to_owned(),
+        });
+        return;
+    }
+    if let Some(reason) = reason {
+        tracker.failures.push(reason);
+    }
+    if !tracker.direct_pending && !tracker.mailbox_pending {
+        let tracker = deliveries
+            .remove(message_id)
+            .expect("delivery tracker exists");
+        let _ = events.send(ClientEvent::DeliveryFailed {
+            peer_id: tracker.peer_id,
+            message_id: message_id.to_owned(),
+            reason: tracker.failures.join("; "),
+        });
+    }
 }
 
 /// Invitations carry the relay's base address. A message dial must target the
@@ -97,12 +215,8 @@ pub async fn run_client(
     events: mpsc::UnboundedSender<ClientEvent>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let local_peer_id = PeerId::from(local_key.public());
-    let has_relay_peer_id = relay_address
-        .iter()
-        .any(|protocol| matches!(protocol, libp2p::multiaddr::Protocol::P2p(_)));
-    if !has_relay_peer_id {
-        return Err("relay address must contain /p2p/<relay-peer-id>".into());
-    }
+    let relay_peer_id =
+        relay_peer_id(&relay_address).ok_or("relay address must contain /p2p/<relay-peer-id>")?;
 
     let mut swarm = SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
@@ -115,6 +229,7 @@ pub async fn run_client(
         .with_relay_client(noise::Config::new, yamux::Config::default)?
         .with_behaviour(|key, relay_client| CiphrChatBehaviour {
             messages: message_behaviour(),
+            mailbox: mailbox_behaviour(),
             relay_client,
             dcutr: dcutr::Behaviour::new(key.public().to_peer_id()),
             identify: identify::Behaviour::new(identify::Config::new(
@@ -129,10 +244,16 @@ pub async fn run_client(
         .clone()
         .with(libp2p::multiaddr::Protocol::P2pCircuit);
     swarm.listen_on(relay_listener)?;
+    swarm.add_peer_address(relay_peer_id, relay_address.clone());
     swarm.dial(relay_address)?;
 
-    let mut pending: HashMap<request_response::OutboundRequestId, (PeerId, String)> =
+    let mut pending_direct: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
+    let mut pending_mailbox: HashMap<request_response::OutboundRequestId, PendingMailboxRequest> =
         HashMap::new();
+    let mut deliveries: HashMap<String, DeliveryTracker> = HashMap::new();
+    let mut mailbox_fetch_pending = false;
+    let mut mailbox_poll = tokio::time::interval(Duration::from_secs(10));
+    mailbox_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let _ = events.send(ClientEvent::Ready {
         peer_id: local_peer_id,
     });
@@ -151,15 +272,49 @@ pub async fn run_client(
                         });
                     }
                 }
-                Some(SwarmCommand::Send { peer_id, message_id, payload }) => {
-                    let request_id = swarm.behaviour_mut().messages.send_request(
+                Some(SwarmCommand::Send { peer_id, message_id, payload, expires_at_epoch_ms }) => {
+                    if deliveries.contains_key(&message_id) {
+                        continue;
+                    }
+                    let direct_request_id = swarm.behaviour_mut().messages.send_request(
                         &peer_id,
-                        WireMessage { payload },
+                        WireMessage { payload: payload.clone() },
                     );
-                    pending.insert(request_id, (peer_id, message_id));
+                    pending_direct.insert(direct_request_id, message_id.clone());
+                    let mailbox_request_id = swarm.behaviour_mut().mailbox.send_request(
+                        &relay_peer_id,
+                        MailboxRequest::Put {
+                            recipient_peer_id: peer_id.to_string(),
+                            message_id: message_id.clone(),
+                            payload,
+                            expires_at_epoch_ms,
+                        },
+                    );
+                    pending_mailbox.insert(mailbox_request_id, PendingMailboxRequest::Put { message_id: message_id.clone() });
+                    deliveries.insert(message_id, DeliveryTracker {
+                        peer_id,
+                        direct_pending: true,
+                        mailbox_pending: true,
+                        failures: Vec::new(),
+                    });
+                }
+                Some(SwarmCommand::AcknowledgeMailbox { message_id }) => {
+                    let request_id = swarm.behaviour_mut().mailbox.send_request(
+                        &relay_peer_id,
+                        MailboxRequest::Ack { message_id },
+                    );
+                    pending_mailbox.insert(request_id, PendingMailboxRequest::Ack);
                 }
                 None => break,
             },
+            _ = mailbox_poll.tick(), if !mailbox_fetch_pending => {
+                let request_id = swarm.behaviour_mut().mailbox.send_request(
+                    &relay_peer_id,
+                    MailboxRequest::Fetch { limit: MAILBOX_FETCH_LIMIT },
+                );
+                pending_mailbox.insert(request_id, PendingMailboxRequest::Fetch);
+                mailbox_fetch_pending = true;
+            }
             event = futures::StreamExt::next(&mut swarm) => match event {
                 Some(SwarmEvent::Behaviour(CiphrChatBehaviourEvent::Messages(event))) => {
                     match event {
@@ -175,26 +330,29 @@ pub async fn run_client(
                                 });
                             }
                             Message::Response { request_id, response } => {
-                                if let Some((peer_id, message_id)) = pending.remove(&request_id) {
-                                    if response.accepted {
-                                        let _ = events.send(ClientEvent::DeliveryAccepted { peer_id, message_id });
-                                    } else {
-                                        let _ = events.send(ClientEvent::DeliveryFailed {
-                                            peer_id,
-                                            message_id,
-                                            reason: "remote peer rejected message".to_owned(),
-                                        });
-                                    }
+                                if let Some(message_id) = pending_direct.remove(&request_id) {
+                                    complete_delivery(
+                                        &message_id,
+                                        response.accepted,
+                                        (!response.accepted).then(|| "remote peer rejected message".to_owned()),
+                                        false,
+                                        &mut deliveries,
+                                        &events,
+                                    );
                                 }
                             }
                         },
                         request_response::Event::OutboundFailure { peer, request_id, error } => {
-                            let message_id = pending.remove(&request_id).map(|(_, message_id)| message_id).unwrap_or_default();
-                            let _ = events.send(ClientEvent::DeliveryFailed {
-                                peer_id: peer,
-                                message_id,
-                                reason: error.to_string(),
-                            });
+                            if let Some(message_id) = pending_direct.remove(&request_id) {
+                                complete_delivery(
+                                    &message_id,
+                                    false,
+                                    Some(format!("direct delivery to {peer} failed: {error}")),
+                                    false,
+                                    &mut deliveries,
+                                    &events,
+                                );
+                            }
                         }
                         request_response::Event::InboundFailure { peer, error, .. } => {
                             let _ = events.send(ClientEvent::NetworkError {
@@ -202,6 +360,78 @@ pub async fn run_client(
                             });
                         }
                         request_response::Event::ResponseSent { .. } => {}
+                    }
+                }
+                Some(SwarmEvent::Behaviour(CiphrChatBehaviourEvent::Mailbox(event))) => {
+                    match event {
+                        request_response::Event::Message { message, .. } => match message {
+                            Message::Response { request_id, response } => {
+                                if let Some(pending_request) = pending_mailbox.remove(&request_id) {
+                                    match pending_request {
+                                        PendingMailboxRequest::Put { message_id } => match response {
+                                            MailboxResponse::Stored => complete_delivery(
+                                                &message_id, true, None, true, &mut deliveries, &events,
+                                            ),
+                                            MailboxResponse::Rejected(reason) => complete_delivery(
+                                                &message_id, false, Some(format!("mailbox rejected message: {reason}")), true, &mut deliveries, &events,
+                                            ),
+                                            _ => complete_delivery(
+                                                &message_id, false, Some("mailbox returned an invalid response".to_owned()), true, &mut deliveries, &events,
+                                            ),
+                                        },
+                                        PendingMailboxRequest::Fetch => {
+                                            mailbox_fetch_pending = false;
+                                            match response {
+                                                MailboxResponse::Messages(messages) => {
+                                                    for message in messages {
+                                                        match message.sender_peer_id.parse::<PeerId>() {
+                                                            Ok(peer_id) => {
+                                                                let _ = events.send(ClientEvent::MailboxMessage {
+                                                                    peer_id,
+                                                                    message_id: message.message_id,
+                                                                    payload: message.payload,
+                                                                });
+                                                            }
+                                                            Err(error) => {
+                                                                let _ = events.send(ClientEvent::NetworkError {
+                                                                    detail: format!("mailbox returned an invalid sender peer id: {error}"),
+                                                                });
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                MailboxResponse::Rejected(reason) => {
+                                                    let _ = events.send(ClientEvent::NetworkError { detail: format!("mailbox fetch rejected: {reason}") });
+                                                }
+                                                _ => {
+                                                    let _ = events.send(ClientEvent::NetworkError { detail: "mailbox returned an invalid fetch response".to_owned() });
+                                                }
+                                            }
+                                        }
+                                        PendingMailboxRequest::Ack => {}
+                                    }
+                                }
+                            }
+                            Message::Request { .. } => {}
+                        },
+                        request_response::Event::OutboundFailure { request_id, error, .. } => {
+                            if let Some(pending_request) = pending_mailbox.remove(&request_id) {
+                                match pending_request {
+                                    PendingMailboxRequest::Put { message_id } => complete_delivery(
+                                        &message_id,
+                                        false,
+                                        Some(format!("encrypted mailbox unavailable: {error}")),
+                                        true,
+                                        &mut deliveries,
+                                        &events,
+                                    ),
+                                    PendingMailboxRequest::Fetch => mailbox_fetch_pending = false,
+                                    PendingMailboxRequest::Ack => {}
+                                }
+                            }
+                        }
+                        request_response::Event::InboundFailure { .. }
+                        | request_response::Event::ResponseSent { .. } => {}
                     }
                 }
                 Some(SwarmEvent::Behaviour(CiphrChatBehaviourEvent::RelayClient(event))) => {

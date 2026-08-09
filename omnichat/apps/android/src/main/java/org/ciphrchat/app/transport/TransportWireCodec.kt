@@ -7,7 +7,7 @@ import java.io.DataOutput
 object TransportWireCodec {
     private const val MAGIC = 0x43495048 // "CIPH"
     private const val MAX_FIELD_BYTES = 4 * 1024
-    private const val MAX_PAYLOAD_BYTES = 1 * 1024 * 1024
+    private const val MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 
     fun write(output: DataOutput, envelope: OutboundEnvelope) {
         val messageId = envelope.messageId.toByteArray(Charsets.UTF_8)

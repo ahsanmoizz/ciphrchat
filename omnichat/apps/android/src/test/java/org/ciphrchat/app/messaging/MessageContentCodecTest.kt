@@ -23,6 +23,16 @@ class MessageContentCodecTest {
     }
 
     @Test
+    fun fiveMiBAttachmentRoundTrips() {
+        val bytes = ByteArray(5 * 1024 * 1024) { (it * 17).toByte() }
+        val decoded = MessageContentCodec.decode(
+            MessageContentCodec.encodeAttachment("maximum.bin", "application/octet-stream", bytes)
+        )
+
+        assertArrayEquals(bytes, decoded.attachment?.bytes)
+    }
+
+    @Test
     fun legacyPlainTextRemainsReadable() {
         assertEquals("legacy", MessageContentCodec.decode("legacy".toByteArray()).text)
     }

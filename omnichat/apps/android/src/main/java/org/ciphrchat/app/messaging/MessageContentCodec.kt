@@ -15,7 +15,7 @@ object MessageContentCodec {
     private const val TEXT = 1
     private const val ATTACHMENT = 2
     private const val MAX_FIELD_BYTES = 4 * 1024
-    private const val MAX_ATTACHMENT_BYTES = 512 * 1024
+    private const val MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
     data class Decoded(
         val text: String? = null,

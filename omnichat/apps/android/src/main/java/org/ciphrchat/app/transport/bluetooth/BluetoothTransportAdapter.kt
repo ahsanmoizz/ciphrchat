@@ -66,11 +66,17 @@ class BluetoothTransportAdapter @Inject constructor(
                     if (!started) return@collect
                     if (scanError != null) {
                         _state.value = TransportState(kind, TransportAvailability.ERROR, scanError)
+                    } else if (peers.isEmpty()) {
+                        _state.value = TransportState(
+                            kind,
+                            TransportAvailability.STARTING,
+                            "Bluetooth ready • scanning for nearby CiphrChat peers"
+                        )
                     } else {
                         val strongest = peers.mapNotNull { it.signalHint }.maxOrNull()
                         val detail = strongest?.let {
-                            "Bluetooth active • nearest peer signal ${BluetoothSignalPolicy.detail(it)}"
-                        } ?: "Bluetooth active • scanning for nearby CiphrChat peers"
+                            "Bluetooth active • ${peers.size} nearby CiphrChat peer${if (peers.size == 1) "" else "s"} • nearest signal ${BluetoothSignalPolicy.detail(it)}"
+                        } ?: "Bluetooth active • ${peers.size} nearby CiphrChat peer${if (peers.size == 1) "" else "s"}"
                         _state.value = TransportState(kind, TransportAvailability.AVAILABLE, detail)
                     }
                 }
@@ -100,7 +106,7 @@ class BluetoothTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.ERROR, error.message!!)
             return Result.failure(error)
         }
-        if (started && _state.value.availability == TransportAvailability.AVAILABLE) {
+        if (started) {
             return Result.success(Unit)
         }
         val adStarted = runCatching { bleAdvertiser.start() }.getOrDefault(false)
@@ -108,7 +114,7 @@ class BluetoothTransportAdapter @Inject constructor(
         val serverStarted = runCatching { gattServerManager.start() }.getOrDefault(false)
         if (serverStarted && adStarted && scanStarted) {
             started = true
-            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth active • advertising, scanning and receiving")
+            _state.value = TransportState(kind, TransportAvailability.STARTING, "Bluetooth ready • scanning for nearby CiphrChat peers")
             return Result.success(Unit)
         }
         bleAdvertiser.stop()

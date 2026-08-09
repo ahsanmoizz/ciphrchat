@@ -23,6 +23,8 @@ In the repository, open **Settings → Secrets and variables → Actions → New
 
 Open **Actions → Deploy relay to VPS → Run workflow**. The workflow uploads the pinned relay source, builds it with Docker Compose, checks `/health`, and prints `/info` with the persistent relay peer ID.
 
+The same persistent Docker volume stores the relay identity and the encrypted mailbox under `/var/lib/ciphrchat`. Mailbox records contain opaque end-to-end-encrypted envelopes, expire after at most seven days, are limited to 100 messages/64 MiB per recipient, and are deleted after the authenticated recipient acknowledges local processing. Never delete the `relay-data` volume during a normal upgrade.
+
 ## 3. Configure the Android Internet address
 
 Construct the relay multiaddress from the workflow summary:
@@ -37,7 +39,7 @@ After the variable is set, push a change or run Android CI manually. The resulti
 
 ## 4. User installation and first use
 
-Download `android-debug.apk` from the latest green Android CI run or from the `latest` release link in the root README. Install it on two Android devices, create one identity on each, grant nearby-device permissions when requested, then exchange invitations through **Connect → Show my QR / Scan QR**. Internet delivery is not release-proven until this two-device test succeeds across separate networks.
+Download `android-debug.apk` from the latest green Android CI run or from the `latest` release link in the root README. Install it on two Android devices, create one identity on each, grant nearby-device permissions when requested, then exchange invitations through **Connect → Show my QR / Scan QR**. Internet delivery is not release-proven until this two-device test succeeds across separate networks, including a test where the receiving app is offline when the sender sends and opens later to collect the encrypted envelope.
 
 ## 5. Public release gate
 

@@ -60,7 +60,7 @@ class TransportWireCodecTest {
     @Test
     fun oversizedPayloadCannotBeWritten() {
         assertThrows(IllegalArgumentException::class.java) {
-            encode(envelope(payload = ByteArray(1_048_577)))
+            encode(envelope(payload = ByteArray(8 * 1024 * 1024 + 1)))
         }
     }
 

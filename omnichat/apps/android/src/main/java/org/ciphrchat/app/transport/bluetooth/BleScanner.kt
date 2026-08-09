@@ -10,6 +10,13 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.ciphrchat.app.transport.DiscoveredPeer
 import org.ciphrchat.app.transport.TransportKind
 import javax.inject.Inject
@@ -25,6 +32,8 @@ class BleScanner @Inject constructor(
     
     private var isScanning = false
     private var scanCallback: ScanCallback? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var stalePeerJob: Job? = null
 
     private val _discoveredPeers = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = _discoveredPeers.asStateFlow()
@@ -66,6 +75,13 @@ class BleScanner @Inject constructor(
         return runCatching {
             activeScanner.startScan(listOf(filter), settings, scanCallback)
             isScanning = true
+            stalePeerJob?.cancel()
+            stalePeerJob = scope.launch {
+                while (isActive) {
+                    delay(STALE_PEER_SWEEP_MS)
+                    pruneStalePeers()
+                }
+            }
             true
         }.getOrElse {
             scanCallback = null
@@ -99,6 +115,8 @@ class BleScanner @Inject constructor(
         val activeScanner = runCatching { scanner }.getOrNull()
         scanCallback?.let { callback -> runCatching { activeScanner?.stopScan(callback) } }
         isScanning = false
+        stalePeerJob?.cancel()
+        stalePeerJob = null
         scanCallback = null
         _lastError.value = null
         synchronized(mapLock) {
@@ -107,8 +125,29 @@ class BleScanner @Inject constructor(
         }
     }
 
-    fun deviceAddressFor(peerId: String): String? =
-        synchronized(mapLock) { discoveredMap.entries.firstOrNull { it.value.id == peerId }?.key }
+    fun deviceAddressFor(peerId: String): String? {
+        pruneStalePeers()
+        return synchronized(mapLock) {
+            discoveredMap.entries.firstOrNull { it.value.id == peerId }?.key
+        }
+    }
 
-    fun discoveredDeviceAddresses(): List<String> = synchronized(mapLock) { discoveredMap.keys.toList() }
+    fun discoveredDeviceAddresses(): List<String> {
+        pruneStalePeers()
+        return synchronized(mapLock) { discoveredMap.keys.toList() }
+    }
+
+    private fun pruneStalePeers(nowEpochMs: Long = System.currentTimeMillis()) {
+        synchronized(mapLock) {
+            val changed = discoveredMap.entries.removeAll {
+                nowEpochMs - it.value.lastSeenEpochMs > PEER_STALE_AFTER_MS
+            }
+            if (changed) _discoveredPeers.value = discoveredMap.values.toList()
+        }
+    }
+
+    private companion object {
+        const val PEER_STALE_AFTER_MS = 20_000L
+        const val STALE_PEER_SWEEP_MS = 5_000L
+    }
 }

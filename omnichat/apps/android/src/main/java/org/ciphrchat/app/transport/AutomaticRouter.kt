@@ -3,24 +3,28 @@ package org.ciphrchat.app.transport
 import javax.inject.Inject
 import javax.inject.Singleton
 
+internal val DEFAULT_TRANSPORT_PRIORITY = listOf(
+    TransportKind.INTERNET_DIRECT,
+    TransportKind.WIFI_LAN,
+    TransportKind.BLUETOOTH_DIRECT,
+    TransportKind.WIFI_AWARE,
+    TransportKind.WIFI_DIRECT,
+    TransportKind.BLUETOOTH_MESH,
+    TransportKind.UWB_ASSIST,
+    TransportKind.ULTRASOUND,
+    TransportKind.INFRARED,
+    TransportKind.NFC_PAIRING,
+    TransportKind.INTERNET_RELAY
+)
+
 @Singleton
 class AutomaticRouter @Inject constructor(
     private val registry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector
 ) {
-    private val priority = listOf(
-        TransportKind.WIFI_LAN,
-        TransportKind.WIFI_AWARE,
-        TransportKind.BLUETOOTH_DIRECT,
-        TransportKind.UWB_ASSIST,
-        TransportKind.INTERNET_DIRECT,
-        TransportKind.BLUETOOTH_MESH,
-        TransportKind.WIFI_DIRECT,
-        TransportKind.ULTRASOUND,
-        TransportKind.INFRARED,
-        TransportKind.NFC_PAIRING,
-        TransportKind.INTERNET_RELAY
-    )
+    // Ordinary Internet is the default. Nearby radios are resilient fallbacks
+    // when the recipient or encrypted mailbox cannot be reached through the relay.
+    private val priority = DEFAULT_TRANSPORT_PRIORITY
 
     suspend fun route(envelope: OutboundEnvelope): SendResult {
         val adapters = priority.mapNotNull(registry::byKind)

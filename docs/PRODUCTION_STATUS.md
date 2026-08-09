@@ -7,7 +7,7 @@ This is the release truth for the repository. Green CI proves that checked-in co
 - Android debug build, lint, Android unit tests, Rust tests/clippy/formatting, relay checks, and relay container build run in GitHub Actions.
 - Local identity, Signal pre-key/session records, contacts, encrypted message previews, encrypted Signal payloads, and queued outbox payloads persist in SQLCipher-backed Room storage.
 - Recovery export/import is a password-protected AES-GCM snapshot containing identity, Signal state, contacts, messages, and sessions.
-- Internet messaging code uses the Rust/libp2p request-response client and a persistent-key circuit relay service; a live relay and two-device delivery are not yet verified.
+- Internet messaging uses Rust/libp2p for live peer delivery and an authenticated encrypted mailbox fallback. The VPS stores only opaque Signal-encrypted envelopes with seven-day expiry, per-recipient quotas, and deletion after recipient acknowledgment; deployment and two-device offline-delivery verification remain required.
 - LAN, Wi-Fi Direct, and Bluetooth GATT code uses bounded framed envelopes and feeds received frames into the message repository; Signal decryption still happens at the application endpoint. Hardware interoperability is not yet verified.
 - Wi-Fi Aware, Bluetooth mesh, nearby audio, and NFC have checked-in authenticated data paths. UWB now negotiates a secure ranging session over BLE and authorizes BLE delivery only after proximity verification; infrared uses ConsumerIrManager transmission plus a CameraX optical receiver when the device exposes both capabilities. NFC and optical routes are explicit/device-dependent, and hardware interoperability remains a required release test.
 

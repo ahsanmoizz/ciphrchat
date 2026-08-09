@@ -17,6 +17,8 @@ libp2p = { version = "0.53.2", features = [
     "ping",
     "quic",
     "relay",
+    "request-response",
+    "cbor",
     "tcp",
     "tokio",
     "yamux"

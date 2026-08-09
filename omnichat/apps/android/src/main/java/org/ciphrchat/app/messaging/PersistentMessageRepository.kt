@@ -61,6 +61,11 @@ class PersistentMessageRepository @Inject constructor(
             p2p.events.collect { event ->
                 when (event) {
                     is RustNetworkEvent.MessageReceived -> receive(event.peerId, event.payload)
+                    is RustNetworkEvent.MailboxMessageReceived -> {
+                        if (receive(event.peerId, event.payload)) {
+                            p2p.acknowledgeMailbox(event.messageId)
+                        }
+                    }
                     is RustNetworkEvent.DeliveryAccepted -> updateDelivery(event.messageId, MessageStatus.SENT)
                     is RustNetworkEvent.DeliveryFailed -> updateDelivery(event.messageId, MessageStatus.QUEUED)
                     else -> Unit
@@ -243,14 +248,14 @@ class PersistentMessageRepository @Inject constructor(
         contentCipher.decrypt(entity.body)
     }.getOrElse { "Encrypted message" }
 
-    private suspend fun receive(peerId: String, wirePayload: ByteArray) {
+    private suspend fun receive(peerId: String, wirePayload: ByteArray): Boolean =
         runCatching {
             val envelope = JSONObject(wirePayload.toString(Charsets.UTF_8))
-            val localId = identity.current()?.publicId ?: return
+            val localId = identity.current()?.publicId ?: error("Local identity is unavailable")
             require(envelope.optInt("protocolVersion", 0) in 1..2) { "Unsupported Internet envelope version" }
             if (envelope.optString("wireType", "message") == "deliveryReceipt") {
                 receiveDeliveryReceipt(peerId, localId, envelope)
-                return@runCatching
+                return@runCatching true
             }
             require(envelope.optString("wireType", "message") == "message") { "Unsupported Internet wire type" }
             require(!envelope.optBoolean("testOnly", false)) { "Test-only envelope rejected" }
@@ -269,17 +274,19 @@ class PersistentMessageRepository @Inject constructor(
                 "Expired Internet envelope"
             }
             val ciphertext = Base64.decode(envelope.getString("encryptedPayload"), Base64.NO_WRAP)
-            require(ciphertext.isNotEmpty() && ciphertext.size <= 1_048_576) { "Invalid encrypted payload" }
+            require(ciphertext.isNotEmpty() && ciphertext.size <= MAX_ENCRYPTED_PAYLOAD_BYTES) {
+                "Invalid encrypted payload"
+            }
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             if (dao.findById(messageId) != null) {
                 sendDeliveryReceipt(contact, messageId, localId)
-                return@runCatching
+                return@runCatching true
             }
             val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
             persistIncoming(messageId, contact.contactId, ciphertext, plaintext, createdAt, "INTERNET_DIRECT")
             sendDeliveryReceipt(contact, messageId, localId)
-        }
-    }
+            true
+        }.getOrDefault(false)
 
     private suspend fun receiveDeliveryReceipt(peerId: String, localId: String, receipt: JSONObject) {
         require(receipt.optString("recipientId") == localId) { "Delivery receipt recipient mismatch" }
@@ -410,5 +417,9 @@ class PersistentMessageRepository @Inject constructor(
         if (mergedStatus == message.status) return
         dao.updateMessage(message.copy(status = mergedStatus))
         if (status == MessageStatus.QUEUED) retryScheduler.schedule()
+    }
+
+    private companion object {
+        const val MAX_ENCRYPTED_PAYLOAD_BYTES = 6 * 1024 * 1024
     }
 }
