@@ -24,6 +24,8 @@ sealed interface RustNetworkEvent {
         val messageId: String,
         val payload: ByteArray
     ) : RustNetworkEvent
+    data object MailboxReady : RustNetworkEvent
+    data class MailboxUnavailable(val detail: String) : RustNetworkEvent
     data class DeliveryAccepted(val peerId: String, val messageId: String) : RustNetworkEvent
     data class DeliveryFailed(val peerId: String, val messageId: String, val reason: String) : RustNetworkEvent
     data class NetworkError(val detail: String) : RustNetworkEvent
@@ -38,6 +40,8 @@ class RustP2pManager @Inject constructor(
     val events: SharedFlow<RustNetworkEvent> = _events.asSharedFlow()
     private val _relayReservationReady = MutableStateFlow(false)
     val relayReservationReady: StateFlow<Boolean> = _relayReservationReady.asStateFlow()
+    private val _mailboxReady = MutableStateFlow(false)
+    val mailboxReady: StateFlow<Boolean> = _mailboxReady.asStateFlow()
     private val swarmStartAccepted = AtomicBoolean(false)
     private val deliveryAwaiter = DeliveryAwaiter()
 
@@ -162,6 +166,22 @@ class RustP2pManager @Inject constructor(
             active?._events?.tryEmit(
                 RustNetworkEvent.MailboxMessageReceived(peerId, messageId, payload)
             )
+        }
+
+        @JvmStatic
+        fun onMailboxReady() {
+            active?.let { manager ->
+                manager._mailboxReady.value = true
+                manager._events.tryEmit(RustNetworkEvent.MailboxReady)
+            }
+        }
+
+        @JvmStatic
+        fun onMailboxUnavailable(detail: String) {
+            active?.let { manager ->
+                manager._mailboxReady.value = false
+                manager._events.tryEmit(RustNetworkEvent.MailboxUnavailable(detail))
+            }
         }
 
         @JvmStatic

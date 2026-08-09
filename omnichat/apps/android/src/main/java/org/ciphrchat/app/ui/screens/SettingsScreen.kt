@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.ui.components.CiphrSectionHeader
 import org.ciphrchat.app.ui.theme.*
 
@@ -48,9 +49,9 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Connections")
         SettingsInfoRow("Automatic routing", "Always enabled")
-        SettingsInfoRow("Internet", "Configured by the installed build")
-        SettingsInfoRow("Wi-Fi", "Available when local discovery is permitted")
-        SettingsInfoRow("Bluetooth mesh", "Authenticated multi-hop forwarding when nearby devices participate")
+        SettingsInfoRow("Internet", "Primary long-range route over mobile data or Internet-connected Wi-Fi")
+        SettingsInfoRow("Wi-Fi LAN", "Works on the same local network even when upstream Internet is unavailable")
+        SettingsInfoRow("Bluetooth mesh", "Counts and forwards only through nearby CiphrChat participants")
         SettingsInfoRow("Nearby methods", "Wi-Fi Aware, Wi-Fi Direct, Bluetooth, and acoustic delivery are device-dependent")
 
         Spacer(Modifier.height(16.dp))
@@ -71,7 +72,7 @@ fun SettingsScreen(
         SettingsInfoRow("Source code", "github.com/ahsanmoizz/ciphrchat")
         SettingsInfoRow("Open-source licenses", "See the repository notices")
         SettingsInfoRow("Security model", "See docs/ARCHITECTURE.md")
-        SettingsInfoRow("Version 0.1.0-dev.7", "Reliability build")
+        SettingsInfoRow("Version ${BuildConfig.VERSION_NAME}", "Cross-network reliability build")
     }
 }
 

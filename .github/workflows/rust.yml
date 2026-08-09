@@ -33,6 +33,14 @@ jobs:
         working-directory: omnichat/crates
         run: cargo test --workspace
 
+      - name: Verify deployed encrypted mailbox end to end
+        working-directory: omnichat/crates
+        env:
+          CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
+        run: |
+          test -n "$CIPHRCHAT_RELAY_ADDRESS"
+          cargo test -p ciphrchat-routing --test live_mailbox -- --ignored --nocapture
+
       - name: Check relay formatting
         working-directory: omnichat/services/bootstrap-relay
         run: cargo fmt --all --check

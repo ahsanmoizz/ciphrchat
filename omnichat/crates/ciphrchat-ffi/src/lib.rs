@@ -115,6 +115,7 @@ fn dispatch_event(jvm: &JavaVM, event: ClientEvent) {
                 );
             }
         }
+        ClientEvent::RelayConnected { .. } => {}
         ClientEvent::InboundMessage { peer_id, payload } => {
             if let (Ok(peer_id), Ok(payload)) = (
                 env.new_string(peer_id.to_string()),
@@ -155,6 +156,20 @@ fn dispatch_event(jvm: &JavaVM, event: ClientEvent) {
                         JValue::Object(&message_id_object),
                         JValue::Object(&payload_object),
                     ],
+                );
+            }
+        }
+        ClientEvent::MailboxReady => {
+            call_callback(&mut env, "onMailboxReady", "()V", &[]);
+        }
+        ClientEvent::MailboxUnavailable { detail } => {
+            if let Ok(detail) = env.new_string(detail) {
+                let detail_object: JObject<'_> = detail.into();
+                call_callback(
+                    &mut env,
+                    "onMailboxUnavailable",
+                    "(Ljava/lang/String;)V",
+                    &[JValue::Object(&detail_object)],
                 );
             }
         }

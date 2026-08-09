@@ -3,6 +3,7 @@ package org.ciphrchat.app.identity
 import android.util.Base64
 import org.ciphrchat.app.data.ContactEntity
 import org.json.JSONObject
+import org.json.JSONException
 import org.whispersystems.libsignal.state.PreKeyBundle
 import org.ciphrchat.app.transport.bluetooth.ContactDiscoveryToken
 import java.security.MessageDigest
@@ -34,8 +35,19 @@ object InvitationCodec {
         .toString()
 
     fun decode(raw: String): ContactEntity {
-        require(raw.length <= MAX_INVITATION_BYTES) { "Invitation is too large" }
-        val json = JSONObject(raw)
+        val invitation = raw.trim()
+        require(invitation.length <= MAX_INVITATION_BYTES) { "Invitation is too large" }
+        require(invitation.startsWith("{")) {
+            "A CiphrChat ID alone cannot pair securely. Scan their QR or paste their full secure invitation."
+        }
+        val json = try {
+            JSONObject(invitation)
+        } catch (error: JSONException) {
+            throw IllegalArgumentException(
+                "This is not a valid CiphrChat invitation. Scan their QR or paste the full secure invitation.",
+                error
+            )
+        }
         require(json.optString("format") == "ciphrchat-invitation") { "Not a CiphrChat invitation" }
         require(json.optInt("version") == VERSION) { "Unsupported invitation version" }
         val contactId = json.getString("contactId")

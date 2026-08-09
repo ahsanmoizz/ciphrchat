@@ -91,6 +91,9 @@ pub enum ClientEvent {
     RelayReservationReady {
         relay_peer_id: PeerId,
     },
+    RelayConnected {
+        relay_peer_id: PeerId,
+    },
     InboundMessage {
         peer_id: PeerId,
         payload: Vec<u8>,
@@ -99,6 +102,10 @@ pub enum ClientEvent {
         peer_id: PeerId,
         message_id: String,
         payload: Vec<u8>,
+    },
+    MailboxReady,
+    MailboxUnavailable {
+        detail: String,
     },
     DeliveryAccepted {
         peer_id: PeerId,
@@ -369,12 +376,19 @@ pub async fn run_client(
                                 if let Some(pending_request) = pending_mailbox.remove(&request_id) {
                                     match pending_request {
                                         PendingMailboxRequest::Put { message_id } => match response {
-                                            MailboxResponse::Stored => complete_delivery(
-                                                &message_id, true, None, true, &mut deliveries, &events,
-                                            ),
-                                            MailboxResponse::Rejected(reason) => complete_delivery(
-                                                &message_id, false, Some(format!("mailbox rejected message: {reason}")), true, &mut deliveries, &events,
-                                            ),
+                                            MailboxResponse::Stored => {
+                                                let _ = events.send(ClientEvent::MailboxReady);
+                                                complete_delivery(
+                                                    &message_id, true, None, true, &mut deliveries, &events,
+                                                )
+                                            }
+                                            MailboxResponse::Rejected(reason) => {
+                                                let detail = format!("mailbox rejected message: {reason}");
+                                                let _ = events.send(ClientEvent::MailboxUnavailable { detail: detail.clone() });
+                                                complete_delivery(
+                                                    &message_id, false, Some(detail), true, &mut deliveries, &events,
+                                                )
+                                            }
                                             _ => complete_delivery(
                                                 &message_id, false, Some("mailbox returned an invalid response".to_owned()), true, &mut deliveries, &events,
                                             ),
@@ -383,6 +397,7 @@ pub async fn run_client(
                                             mailbox_fetch_pending = false;
                                             match response {
                                                 MailboxResponse::Messages(messages) => {
+                                                    let _ = events.send(ClientEvent::MailboxReady);
                                                     for message in messages {
                                                         match message.sender_peer_id.parse::<PeerId>() {
                                                             Ok(peer_id) => {
@@ -401,6 +416,9 @@ pub async fn run_client(
                                                     }
                                                 }
                                                 MailboxResponse::Rejected(reason) => {
+                                                    let _ = events.send(ClientEvent::MailboxUnavailable {
+                                                        detail: format!("mailbox fetch rejected: {reason}"),
+                                                    });
                                                     let _ = events.send(ClientEvent::NetworkError { detail: format!("mailbox fetch rejected: {reason}") });
                                                 }
                                                 _ => {
@@ -425,7 +443,12 @@ pub async fn run_client(
                                         &mut deliveries,
                                         &events,
                                     ),
-                                    PendingMailboxRequest::Fetch => mailbox_fetch_pending = false,
+                                    PendingMailboxRequest::Fetch => {
+                                        mailbox_fetch_pending = false;
+                                        let _ = events.send(ClientEvent::MailboxUnavailable {
+                                            detail: format!("encrypted mailbox unavailable: {error}"),
+                                        });
+                                    }
                                     PendingMailboxRequest::Ack => {}
                                 }
                             }
@@ -439,6 +462,9 @@ pub async fn run_client(
                         let _ = events.send(ClientEvent::RelayReservationReady { relay_peer_id });
                     }
                 }
+                Some(SwarmEvent::ConnectionEstablished { peer_id, .. }) if peer_id == relay_peer_id => {
+                    let _ = events.send(ClientEvent::RelayConnected { relay_peer_id: peer_id });
+                }
                 Some(SwarmEvent::OutgoingConnectionError { peer_id, error, .. }) => {
                     let detail = match peer_id {
                         Some(peer_id) => format!("connection to {peer_id} failed: {error}"),
@@ -449,6 +475,16 @@ pub async fn run_client(
                 Some(SwarmEvent::IncomingConnectionError { error, .. }) => {
                     let _ = events.send(ClientEvent::NetworkError {
                         detail: format!("incoming connection failed: {error}"),
+                    });
+                }
+                Some(SwarmEvent::ListenerError { listener_id, error }) => {
+                    let _ = events.send(ClientEvent::NetworkError {
+                        detail: format!("relay listener {listener_id} failed: {error}"),
+                    });
+                }
+                Some(SwarmEvent::ListenerClosed { listener_id, reason, .. }) => {
+                    let _ = events.send(ClientEvent::NetworkError {
+                        detail: format!("relay listener {listener_id} closed: {reason:?}"),
                     });
                 }
                 Some(_) => {}

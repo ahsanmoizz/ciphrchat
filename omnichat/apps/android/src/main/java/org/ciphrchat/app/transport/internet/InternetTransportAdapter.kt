@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.ciphrchat.app.worker.PendingMessageRetryScheduler
 import javax.inject.Inject
@@ -42,20 +43,41 @@ class InternetTransportAdapter @Inject constructor(
 
     init {
         scope.launch {
-            rustP2pManager.relayReservationReady.collect { ready ->
-                if (ready) {
+            combine(
+                rustP2pManager.relayReservationReady,
+                rustP2pManager.mailboxReady
+            ) { relayReady, mailboxReady -> relayReady to mailboxReady }
+                .collect { (relayReady, mailboxReady) ->
+                if (mailboxReady) {
                     started = true
                     _state.value = TransportState(
                         kind,
                         TransportAvailability.AVAILABLE,
-                        "Secure relay connected"
+                        "Internet ready • encrypted offline delivery active"
                     )
                     retryScheduler.scheduleNow()
+                } else if (relayReady) {
+                    _state.value = TransportState(
+                        kind,
+                        TransportAvailability.STARTING,
+                        "Relay connected • verifying encrypted offline delivery"
+                    )
                 } else if (started) {
                     _state.value = TransportState(
                         kind,
                         TransportAvailability.STARTING,
-                        "Connecting to the secure relay"
+                        "Connecting to the secure Internet relay"
+                    )
+                }
+            }
+        }
+        scope.launch {
+            rustP2pManager.events.collect { event ->
+                if (event is RustNetworkEvent.MailboxUnavailable) {
+                    _state.value = TransportState(
+                        kind,
+                        TransportAvailability.ERROR,
+                        event.detail
                     )
                 }
             }
@@ -72,10 +94,10 @@ class InternetTransportAdapter @Inject constructor(
         val result = rustP2pManager.startSwarm()
         result.onSuccess {
             started = true
-            _state.value = if (rustP2pManager.hasRelayReservation()) {
-                TransportState(kind, TransportAvailability.AVAILABLE, "Secure relay connected")
+            _state.value = if (rustP2pManager.mailboxReady.value) {
+                TransportState(kind, TransportAvailability.AVAILABLE, "Internet ready • encrypted offline delivery active")
             } else {
-                TransportState(kind, TransportAvailability.STARTING, "Connecting to the secure relay; queued messages will retry automatically")
+                TransportState(kind, TransportAvailability.STARTING, "Connecting and verifying encrypted offline delivery")
             }
         }.onFailure { error ->
             _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.ERROR, error.message ?: "Unable to start relay client")
@@ -105,8 +127,8 @@ class InternetTransportAdapter @Inject constructor(
         }
         val contact = contacts.find(recipientId)
             ?: return Reachability.Unreachable("Contact has no Internet invitation")
-        return if (!rustP2pManager.hasRelayReservation()) {
-            Reachability.Unreachable("Secure relay is still connecting; the message will retry automatically")
+        return if (!rustP2pManager.mailboxReady.value) {
+            Reachability.Unreachable("Encrypted offline delivery is still being verified")
         } else if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
             Reachability.Reachable
         } else {
@@ -118,8 +140,8 @@ class InternetTransportAdapter @Inject constructor(
         if (!started) {
             return SendResult.Failed(IllegalStateException("Internet relay client is not running"))
         }
-        if (!rustP2pManager.hasRelayReservation()) {
-            return SendResult.Rejected("Secure relay is still connecting")
+        if (!rustP2pManager.mailboxReady.value) {
+            return SendResult.Rejected("Encrypted Internet delivery is still connecting")
         }
         if (envelope.testOnly) {
             return SendResult.Failed(IllegalStateException("Refusing to send a test-only envelope over the Internet"))
@@ -129,9 +151,9 @@ class InternetTransportAdapter @Inject constructor(
         if (contact.relayAddress.isBlank() || contact.peerId.startsWith("local:")) {
             return SendResult.Rejected("Contact invitation does not contain an Internet route")
         }
-        if (!rustP2pManager.connectPeer(contact.peerId, contact.relayAddress)) {
-            return SendResult.Failed(IllegalStateException("Peer address was rejected by the native network"))
-        }
+        // A live relay circuit can deliver immediately when both peers are online. The
+        // encrypted mailbox remains the reliable path when that optional circuit is absent.
+        rustP2pManager.connectPeer(contact.peerId, contact.relayAddress)
         val payload = InternetWireCodec.encode(envelope)
         return rustP2pManager.sendMessageAwaitingDelivery(
             contact.peerId,

@@ -70,13 +70,14 @@ fun ConnectScreen(
                 value = invitation,
                 onValueChange = { invitation = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Paste invitation") },
+                label = { Text("Paste full secure invitation") },
+                supportingText = { Text("A ciphr: ID alone cannot securely pair two devices") },
                 minLines = 2
             )
             Spacer(Modifier.height(8.dp))
             CiphrSecondaryButton(
                 "Pair invitation",
-                onClick = { onImportInvitation(invitation.trim()); invitation = "" }
+                onClick = { onImportInvitation(invitation.trim()) }
             )
             statusMessage?.let {
                 Spacer(Modifier.height(8.dp))

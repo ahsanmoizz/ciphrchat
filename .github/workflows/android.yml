@@ -38,7 +38,9 @@ jobs:
       working-directory: ./omnichat
       env:
         CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
-      run: ./gradlew assembleDebug -PbuildRust
+      run: |
+        test -n "$CIPHRCHAT_RELAY_ADDRESS"
+        ./gradlew assembleDebug -PbuildRust
 
     - name: Verify APK before publishing
       working-directory: ./omnichat

@@ -18,6 +18,10 @@ the app can detect automatically from what requires two compatible devices.
    **Connect → Scan QR**, scan it, and complete pairing. Confirm that the
    contact appears in **Chats**.
 
+For manual pairing, copy and paste the **full secure invitation**. A short
+`ciphr:` ID is a fingerprint, not a network address or encryption-key bundle,
+so it cannot securely pair two phones by itself.
+
 ## Read the automatic capability scan
 
 Open **Connect** and scroll to **Connection methods**. CiphrChat starts its
@@ -34,13 +38,22 @@ restart. Each row reports the current device state:
 The scan is device-specific. One phone can report its own support, but no
 nearby method can prove delivery without a second compatible phone.
 
+The Bluetooth/mesh peer count includes only nearby CiphrChat installations
+that are currently advertising CiphrChat's authenticated BLE service. It does
+not count every phone whose Bluetooth switch is on. A phone cannot forward
+CiphrChat traffic unless CiphrChat is installed and its nearby listener is
+running.
+
 ## Core Internet test
 
 1. With both phones paired, send `internet test 001` in both directions.
 2. Confirm the message arrives on the other phone and its status changes from
    queued/routing to sent or delivered.
 3. Disable Wi-Fi on one phone and repeat over mobile data.
-4. Force-stop and reopen CiphrChat, then send another message. Transport
+4. Put the two phones on different Wi-Fi or cellular networks and repeat.
+5. Turn the receiving phone offline, send a message, then reconnect and open
+   CiphrChat. The encrypted relay mailbox should deliver the queued message.
+6. Force-stop and reopen CiphrChat, then send another message. Transport
    listeners should restart automatically.
 
 If Internet says **relay address is not configured**, the APK was built without
@@ -69,6 +82,12 @@ Automatic routing chooses a usable route. It does not falsely mark an
 unsupported radio as available. For a focused route test, temporarily disable
 the other radios and verify the row becomes unavailable or the message falls
 back to the next working route.
+
+Wi-Fi LAN does not require the router to have Internet access, but both phones
+must still be connected to the same router or hotspot and that network must
+allow devices to talk to each other. If there is no Wi-Fi signal/link at all,
+LAN cannot work. Conventional Internet delivery works over either mobile data
+or Internet-connected Wi-Fi and is the primary long-range route.
 
 ## Media test
 

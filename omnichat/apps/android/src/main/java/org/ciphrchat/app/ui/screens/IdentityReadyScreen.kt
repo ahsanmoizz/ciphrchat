@@ -18,6 +18,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import org.ciphrchat.app.ui.components.CiphrCard
 import org.ciphrchat.app.ui.components.CiphrPrimaryButton
 import org.ciphrchat.app.ui.components.CiphrSecondaryButton
@@ -30,6 +32,7 @@ fun IdentityReadyScreen(
     qrContent: String? = null,
     onStartMessaging: () -> Unit
 ) {
+    val clipboard = LocalClipboardManager.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -114,6 +117,14 @@ fun IdentityReadyScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
+
+                if (!qrContent.isNullOrBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    CiphrSecondaryButton(
+                        text = "Copy secure invitation",
+                        onClick = { clipboard.setText(AnnotatedString(qrContent)) }
+                    )
                 }
             }
         }
