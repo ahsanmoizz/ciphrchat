@@ -40,6 +40,16 @@ jobs:
         CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
       run: ./gradlew assembleDebug -PbuildRust
 
+    - name: Verify APK before publishing
+      working-directory: ./omnichat
+      run: |
+        APK="apps/android/build/outputs/apk/debug/android-debug.apk"
+        test -s "$APK"
+        unzip -t "$APK"
+        APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+        "$APKSIGNER" verify --verbose "$APK"
+        sha256sum "$APK" | tee "$APK.sha256"
+
     - name: Run Lint
       working-directory: ./omnichat
       run: ./gradlew lint
@@ -52,7 +62,9 @@ jobs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: app-debug
-        path: omnichat/apps/android/build/outputs/apk/debug/android-debug.apk
+        path: |
+          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk
+          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256
 
     - name: Publish latest APK release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -68,5 +80,6 @@ jobs:
             --prerelease
         gh release upload latest \
           omnichat/apps/android/build/outputs/apk/debug/android-debug.apk \
+          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256 \
           --repo "$GITHUB_REPOSITORY" \
           --clobber
