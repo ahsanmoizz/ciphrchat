@@ -39,4 +39,16 @@ class DeliveryStatusPolicyTest {
             assertEquals(MessageStatus.QUEUED, DeliveryStatusPolicy.statusFor(result))
         }
     }
+
+    @Test
+    fun deliveredCannotBeDowngradedByLateNetworkCallbacks() {
+        assertEquals(
+            MessageStatus.DELIVERED,
+            DeliveryStatusPolicy.merge(MessageStatus.DELIVERED, MessageStatus.SENT)
+        )
+        assertEquals(
+            MessageStatus.DELIVERED,
+            DeliveryStatusPolicy.merge(MessageStatus.DELIVERED, MessageStatus.QUEUED)
+        )
+    }
 }

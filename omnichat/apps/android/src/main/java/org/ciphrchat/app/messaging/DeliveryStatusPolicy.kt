@@ -11,4 +11,7 @@ object DeliveryStatusPolicy {
         is SendResult.Failure,
         SendResult.Success -> MessageStatus.QUEUED
     }
+
+    fun merge(current: MessageStatus, next: MessageStatus): MessageStatus =
+        if (current == MessageStatus.DELIVERED) MessageStatus.DELIVERED else next
 }

@@ -207,12 +207,21 @@ class PersistentMessageRepository @Inject constructor(
             senderInvitation = senderInvitation
         )
         val sendResult = router.route(envelope)
+        val persisted = dao.findById(entity.id) ?: entity
         val finalEntity = when (sendResult) {
-            is SendResult.Accepted -> entity.copy(
-                status = DeliveryStatusPolicy.statusFor(sendResult),
+            is SendResult.Accepted -> persisted.copy(
+                status = DeliveryStatusPolicy.merge(
+                    persisted.status,
+                    DeliveryStatusPolicy.statusFor(sendResult)
+                ),
                 selectedTransport = sendResult.transport.name
             )
-            else -> entity.copy(status = DeliveryStatusPolicy.statusFor(sendResult))
+            else -> persisted.copy(
+                status = DeliveryStatusPolicy.merge(
+                    persisted.status,
+                    DeliveryStatusPolicy.statusFor(sendResult)
+                )
+            )
         }
         dao.updateMessage(finalEntity)
         if (finalEntity.status == MessageStatus.QUEUED ||
@@ -394,8 +403,9 @@ class PersistentMessageRepository @Inject constructor(
     private suspend fun updateDelivery(messageId: String, status: MessageStatus) {
         if (messageId.isBlank()) return
         val message = dao.findById(messageId) ?: return
-        if (message.status == MessageStatus.DELIVERED) return
-        dao.updateMessage(message.copy(status = status))
+        val mergedStatus = DeliveryStatusPolicy.merge(message.status, status)
+        if (mergedStatus == message.status) return
+        dao.updateMessage(message.copy(status = mergedStatus))
         if (status == MessageStatus.QUEUED) scheduleRetry()
     }
 
