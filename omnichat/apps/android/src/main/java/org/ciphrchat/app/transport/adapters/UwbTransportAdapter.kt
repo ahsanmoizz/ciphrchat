@@ -1,6 +1,7 @@
 package org.ciphrchat.app.transport.adapters
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.uwb.RangingParameters
 import androidx.core.uwb.RangingResult
@@ -26,6 +27,7 @@ import org.ciphrchat.app.transport.bluetooth.BluetoothTransportAdapter
 import org.ciphrchat.app.transport.bluetooth.GattServerManager
 import org.ciphrchat.app.transport.uwb.UwbOobFrameCodec
 import java.security.SecureRandom
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -70,8 +72,16 @@ class UwbTransportAdapter @Inject constructor(
 
     override suspend fun start(): Result<Unit> {
         if (started && _state.value.availability == TransportAvailability.AVAILABLE) return Result.success(Unit)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !context.packageManager.hasSystemFeature("android.hardware.uwb")) {
-            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB requires a supported Android 12+ device")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB requires Android 12 or newer")
+            return Result.failure(IllegalStateException("UWB API is unavailable"))
+        }
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_UWB)) {
+            _state.value = TransportState(
+                kind,
+                TransportAvailability.UNAVAILABLE,
+                "No UWB radio reported by this phone; Android version alone does not add UWB"
+            )
             return Result.failure(IllegalStateException("UWB hardware is unavailable"))
         }
         return runCatching {
@@ -195,9 +205,23 @@ class UwbTransportAdapter @Inject constructor(
                 session.scope.prepareSession(parameters).collect { result ->
                     if (result is RangingResult.RangingResultPosition) {
                         val distance = result.position.distance?.value
-                        if (distance != null && distance <= 2.5f) {
-                            verifiedPeers[session.mac] = System.currentTimeMillis()
-                            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "UWB proximity verified; BLE message delivery is enabled")
+                        if (distance != null) {
+                            val formatted = String.format(Locale.US, "%.2f", distance)
+                            if (distance <= 2.5f) {
+                                verifiedPeers[session.mac] = System.currentTimeMillis()
+                                _state.value = TransportState(
+                                    kind,
+                                    TransportAvailability.AVAILABLE,
+                                    "UWB measured $formatted m • proximity verified; BLE carries the encrypted message"
+                                )
+                            } else {
+                                verifiedPeers.remove(session.mac)
+                                _state.value = TransportState(
+                                    kind,
+                                    TransportAvailability.AVAILABLE,
+                                    "UWB measured $formatted m • move within 2.5 m to verify proximity"
+                                )
+                            }
                         }
                     }
                 }

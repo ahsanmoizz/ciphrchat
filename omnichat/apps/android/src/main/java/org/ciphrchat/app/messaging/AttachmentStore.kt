@@ -20,7 +20,7 @@ import android.security.keystore.KeyProperties
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 
-/** Stores local attachment copies encrypted at rest in the app-private files directory. */
+/** Stores local attachment copies encrypted at rest in the app-private CiphrChat directory. */
 @Singleton
 class AttachmentStore @Inject constructor(@ApplicationContext private val context: Context) {
     data class Input(val fileName: String, val mimeType: String, val bytes: ByteArray)
@@ -38,7 +38,7 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
 
     fun save(fileName: String, mimeType: String, bytes: ByteArray): Stored {
         require(bytes.size in 1..MAX_ATTACHMENT_BYTES) { "Attachments must be between 1 byte and ${MAX_ATTACHMENT_BYTES / 1024} KiB" }
-        val directory = File(context.filesDir, "attachments").apply { mkdirs() }
+        val directory = File(context.filesDir, "CiphrChat/attachments").apply { mkdirs() }
         val target = File(directory, "${System.currentTimeMillis()}-${randomHex(12)}.bin")
         val iv = ByteArray(IV_BYTES).also(SecureRandom()::nextBytes)
         val cipher = Cipher.getInstance(TRANSFORMATION).apply {

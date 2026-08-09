@@ -106,6 +106,7 @@ fun ChatScreen(
                     time = SimpleDateFormat("HH:mm", currentLocale).format(Date(message.createdAtEpochMs)),
                     isOutgoing = message.direction == MessageDirection.OUTGOING,
                     statusLabel = if (message.direction == MessageDirection.OUTGOING) message.status.name.lowercase() else null,
+                    selectedTransport = message.selectedTransport,
                     attachmentFileName = message.attachmentFileName,
                     attachmentMimeType = message.attachmentMimeType,
                     attachmentSizeBytes = message.attachmentSizeBytes,

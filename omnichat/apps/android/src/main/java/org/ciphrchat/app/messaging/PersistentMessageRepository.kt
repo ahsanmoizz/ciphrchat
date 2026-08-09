@@ -12,13 +12,7 @@ import org.json.JSONObject
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import android.net.Uri
-import android.content.Context
-import androidx.work.BackoffPolicy
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import dagger.hilt.android.qualifiers.ApplicationContext
-import org.ciphrchat.app.worker.PendingMessageRetryWorker
+import org.ciphrchat.app.worker.PendingMessageRetryScheduler
 import org.ciphrchat.app.crypto.SignalSessionManager
 import org.ciphrchat.app.data.AppDatabase
 import org.ciphrchat.app.data.MessageEntity
@@ -37,7 +31,6 @@ import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.ReciprocalPairingPolicy
 import org.whispersystems.libsignal.SignalProtocolAddress
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -53,7 +46,7 @@ class PersistentMessageRepository @Inject constructor(
     private val identity: IdentityRepository,
     private val attachmentStore: AttachmentStore,
     private val invitationService: InvitationService,
-    @ApplicationContext private val context: Context
+    private val retryScheduler: PendingMessageRetryScheduler
 ) : MessageRepository {
 
     private val dao = database.messageDao()
@@ -62,7 +55,7 @@ class PersistentMessageRepository @Inject constructor(
     init {
         networkScope.launch {
             dao.requeueFailedMessages()
-            if (dao.getMessagesPendingDelivery().isNotEmpty()) scheduleRetry()
+            if (dao.getMessagesPendingDelivery().isNotEmpty()) retryScheduler.scheduleNow()
         }
         networkScope.launch {
             p2p.events.collect { event ->
@@ -75,7 +68,7 @@ class PersistentMessageRepository @Inject constructor(
             }
         }
         networkScope.launch {
-            inboundBus.events.collect { event -> receiveLocal(event.envelope) }
+            inboundBus.events.collect { event -> receiveLocal(event.envelope, event.transport) }
         }
     }
 
@@ -226,7 +219,7 @@ class PersistentMessageRepository @Inject constructor(
         dao.updateMessage(finalEntity)
         if (finalEntity.status == MessageStatus.QUEUED ||
             finalEntity.status == MessageStatus.SENT && finalEntity.selectedTransport == "INTERNET_DIRECT"
-        ) scheduleRetry()
+        ) retryScheduler.schedule()
         return finalEntity.toModel()
     }
 
@@ -318,7 +311,10 @@ class PersistentMessageRepository @Inject constructor(
         )
     }
 
-    private suspend fun receiveLocal(envelope: OutboundEnvelope) {
+    private suspend fun receiveLocal(
+        envelope: OutboundEnvelope,
+        transport: org.ciphrchat.app.transport.TransportKind
+    ) {
         val localId = identity.current()?.publicId ?: return
         if (envelope.testOnly || envelope.protocolVersion !in 1..2 || envelope.recipientId != localId ||
             envelope.expiresAtEpochMs < System.currentTimeMillis() || envelope.hopLimit !in 0..16) return
@@ -326,7 +322,14 @@ class PersistentMessageRepository @Inject constructor(
             val contact = resolveLocalSender(envelope.senderId, envelope.senderInvitation)
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             val plaintext = sessions.decryptSerializedMessage(address, envelope.encryptedPayload)
-            persistIncoming(envelope.messageId, contact.contactId, envelope.encryptedPayload, plaintext, envelope.createdAtEpochMs, "LOCAL")
+            persistIncoming(
+                envelope.messageId,
+                contact.contactId,
+                envelope.encryptedPayload,
+                plaintext,
+                envelope.createdAtEpochMs,
+                transport.name
+            )
         }
     }
 
@@ -406,18 +409,6 @@ class PersistentMessageRepository @Inject constructor(
         val mergedStatus = DeliveryStatusPolicy.merge(message.status, status)
         if (mergedStatus == message.status) return
         dao.updateMessage(message.copy(status = mergedStatus))
-        if (status == MessageStatus.QUEUED) scheduleRetry()
-    }
-
-    private fun scheduleRetry() {
-        val request = OneTimeWorkRequestBuilder<PendingMessageRetryWorker>()
-            .setInitialDelay(10, TimeUnit.SECONDS)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "ciphrchat-pending-message-delivery",
-            ExistingWorkPolicy.KEEP,
-            request
-        )
+        if (status == MessageStatus.QUEUED) retryScheduler.schedule()
     }
 }

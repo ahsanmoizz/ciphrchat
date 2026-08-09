@@ -112,8 +112,10 @@ object CapabilityPolicy {
                 when {
                     features.sdkInt < Build.VERSION_CODES.S && !features.locationEnabled ->
                         CapabilityAssessment(kind, TransportAvailability.UNAVAILABLE, "Turn on Location services for Bluetooth discovery on this Android version")
-                    features.bluetoothEnabled != true ->
+                    features.bluetoothEnabled == false ->
                         CapabilityAssessment(kind, TransportAvailability.UNAVAILABLE, "Bluetooth is turned off")
+                    features.bluetoothEnabled == null ->
+                        CapabilityAssessment(kind, TransportAvailability.STARTING, "Bluetooth radio state is refreshing")
                     else -> CapabilityAssessment(kind, TransportAvailability.STARTING, "Bluetooth detected; ready to start")
                 }
             }
@@ -197,7 +199,7 @@ object CapabilityPolicy {
             !features.hasUwb -> CapabilityAssessment(
                 TransportKind.UWB_ASSIST,
                 TransportAvailability.UNAVAILABLE,
-                "UWB hardware not detected"
+                "No UWB radio reported by this phone; Android version alone does not add UWB"
             )
             !features.hasBluetoothLe -> CapabilityAssessment(
                 TransportKind.UWB_ASSIST,

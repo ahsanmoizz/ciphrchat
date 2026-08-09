@@ -69,7 +69,8 @@ class CapabilityPolicyTest {
             emptySet()
         ).assessment(TransportKind.UWB_ASSIST)
 
-        assertEquals("UWB hardware not detected", uwb.detail)
+        assertTrue(uwb.detail.contains("No UWB radio"))
+        assertTrue(uwb.detail.contains("Android version alone"))
     }
 
     @Test

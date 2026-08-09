@@ -56,7 +56,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Privacy")
         SettingsInfoRow("App lock", "Not available in this release")
-        SettingsInfoRow("Local storage", "Encrypted local database")
+        SettingsInfoRow("Local storage", "Messages and attachments are encrypted in CiphrChat's private app storage")
         SettingsInfoRow("Blocked contacts", "Not available in this release")
         SettingsInfoRow("Delete local data", "Use Android app storage settings")
 
@@ -71,7 +71,7 @@ fun SettingsScreen(
         SettingsInfoRow("Source code", "github.com/ahsanmoizz/ciphrchat")
         SettingsInfoRow("Open-source licenses", "See the repository notices")
         SettingsInfoRow("Security model", "See docs/ARCHITECTURE.md")
-        SettingsInfoRow("Version 0.1.0-dev", "Development build")
+        SettingsInfoRow("Version 0.1.0-dev.7", "Reliability build")
     }
 }
 

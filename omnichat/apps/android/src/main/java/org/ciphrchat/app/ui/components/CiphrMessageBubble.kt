@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
@@ -20,11 +22,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.clip
+import org.ciphrchat.app.messaging.TransportPresentationPolicy
 import org.ciphrchat.app.ui.theme.CiphrBorder
 import org.ciphrchat.app.ui.theme.CiphrPrimarySoft
 import org.ciphrchat.app.ui.theme.CiphrSurfaceMuted
 import org.ciphrchat.app.ui.theme.CiphrText
 import org.ciphrchat.app.ui.theme.CiphrTextSecondary
+import org.ciphrchat.app.ui.theme.CiphrSuccess
+import org.ciphrchat.app.ui.theme.CiphrPrimaryHover
+import org.ciphrchat.app.ui.theme.CiphrWarning
 
 @Composable
 fun CiphrMessageBubble(
@@ -32,12 +39,14 @@ fun CiphrMessageBubble(
     time: String,
     isOutgoing: Boolean,
     statusLabel: String? = null,
+    selectedTransport: String? = null,
     attachmentFileName: String? = null,
     attachmentMimeType: String? = null,
     attachmentSizeBytes: Long = 0L,
     onOpenAttachment: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val route = TransportPresentationPolicy.forName(selectedTransport)
     val bubbleShape = if (isOutgoing) {
         RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
     } else {
@@ -85,6 +94,25 @@ fun CiphrMessageBubble(
                 } else {
                     Text(text = text, color = CiphrText, style = MaterialTheme.typography.bodyLarge)
                 }
+                if (route != null) {
+                    Row(
+                        modifier = Modifier.align(Alignment.End).padding(top = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(routeDotColor(selectedTransport))
+                        )
+                        Text(
+                            text = "${route.label} • ${route.operatingRange}",
+                            color = CiphrTextSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier.align(Alignment.End),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -106,6 +134,12 @@ fun CiphrMessageBubble(
             }
         }
     }
+}
+
+private fun routeDotColor(name: String?) = when {
+    name?.startsWith("INTERNET") == true -> CiphrSuccess
+    name?.startsWith("BLUETOOTH") == true || name == "UWB_ASSIST" -> CiphrPrimaryHover
+    else -> CiphrWarning
 }
 
 private fun formatBytes(bytes: Long): String = when {

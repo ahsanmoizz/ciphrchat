@@ -6,13 +6,20 @@ import org.ciphrchat.app.transport.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import org.ciphrchat.app.worker.PendingMessageRetryScheduler
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class InternetTransportAdapter @Inject constructor(
     private val rustP2pManager: RustP2pManager,
-    private val contacts: ContactRepository
+    private val contacts: ContactRepository,
+    private val retryScheduler: PendingMessageRetryScheduler
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.INTERNET_DIRECT
     override val capabilities: Set<TransportCapability> = setOf(
@@ -31,6 +38,29 @@ class InternetTransportAdapter @Inject constructor(
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     private var started = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        scope.launch {
+            rustP2pManager.relayReservationReady.collect { ready ->
+                if (ready) {
+                    started = true
+                    _state.value = TransportState(
+                        kind,
+                        TransportAvailability.AVAILABLE,
+                        "Secure relay connected"
+                    )
+                    retryScheduler.scheduleNow()
+                } else if (started) {
+                    _state.value = TransportState(
+                        kind,
+                        TransportAvailability.STARTING,
+                        "Connecting to the secure relay"
+                    )
+                }
+            }
+        }
+    }
 
     override suspend fun start(): Result<Unit> {
         if (started) return Result.success(Unit)
@@ -40,17 +70,17 @@ class InternetTransportAdapter @Inject constructor(
             return Result.failure(error)
         }
         val result = rustP2pManager.startSwarm()
-        val readyResult = result.fold(
-            onSuccess = { rustP2pManager.awaitRelayReservation() },
-            onFailure = { Result.failure(it) }
-        )
-        readyResult.onSuccess {
+        result.onSuccess {
             started = true
-            _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.AVAILABLE, "Secure relay connected")
+            _state.value = if (rustP2pManager.hasRelayReservation()) {
+                TransportState(kind, TransportAvailability.AVAILABLE, "Secure relay connected")
+            } else {
+                TransportState(kind, TransportAvailability.STARTING, "Connecting to the secure relay; queued messages will retry automatically")
+            }
         }.onFailure { error ->
             _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.ERROR, error.message ?: "Unable to start relay client")
         }
-        return readyResult
+        return result
     }
 
     override suspend fun stop(): Result<Unit> {
@@ -75,7 +105,9 @@ class InternetTransportAdapter @Inject constructor(
         }
         val contact = contacts.find(recipientId)
             ?: return Reachability.Unreachable("Contact has no Internet invitation")
-        return if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
+        return if (!rustP2pManager.hasRelayReservation()) {
+            Reachability.Unreachable("Secure relay is still connecting; the message will retry automatically")
+        } else if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
             Reachability.Reachable
         } else {
             Reachability.Unreachable("Contact invitation has no Internet peer address")
@@ -85,6 +117,9 @@ class InternetTransportAdapter @Inject constructor(
     override suspend fun send(envelope: OutboundEnvelope): SendResult {
         if (!started) {
             return SendResult.Failed(IllegalStateException("Internet relay client is not running"))
+        }
+        if (!rustP2pManager.hasRelayReservation()) {
+            return SendResult.Rejected("Secure relay is still connecting")
         }
         if (envelope.testOnly) {
             return SendResult.Failed(IllegalStateException("Refusing to send a test-only envelope over the Internet"))

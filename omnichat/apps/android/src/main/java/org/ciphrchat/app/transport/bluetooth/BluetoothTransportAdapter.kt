@@ -10,6 +10,12 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.ciphrchat.app.transport.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -50,6 +56,26 @@ class BluetoothTransportAdapter @Inject constructor(
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
     private val adapter = bluetoothManager?.adapter
     private var started = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val nearbyPeers: StateFlow<List<DiscoveredPeer>> = bleScanner.discoveredPeers
+
+    init {
+        scope.launch {
+            combine(bleScanner.discoveredPeers, bleScanner.lastError) { peers, error -> peers to error }
+                .collect { (peers, scanError) ->
+                    if (!started) return@collect
+                    if (scanError != null) {
+                        _state.value = TransportState(kind, TransportAvailability.ERROR, scanError)
+                    } else {
+                        val strongest = peers.mapNotNull { it.signalHint }.maxOrNull()
+                        val detail = strongest?.let {
+                            "Bluetooth active • nearest peer signal ${BluetoothSignalPolicy.detail(it)}"
+                        } ?: "Bluetooth active • scanning for nearby CiphrChat peers"
+                        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, detail)
+                    }
+                }
+        }
+    }
 
     override suspend fun start(): Result<Unit> {
         if (adapter == null) {
@@ -62,21 +88,38 @@ class BluetoothTransportAdapter @Inject constructor(
             _state.value = TransportState(kind, TransportAvailability.PERMISSION_REQUIRED, error.message!!)
             return Result.failure(error)
         }
-        if (!adapter.isEnabled) {
+        val enabled = runCatching { adapter.isEnabled }.getOrNull()
+        if (enabled == false) {
             val error = IllegalStateException("Bluetooth is disabled")
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, error.message!!)
             return Result.failure(error)
         }
+        if (enabled == null) {
+            val error = IllegalStateException("Android could not read the Bluetooth radio state")
+            _state.value = TransportState(kind, TransportAvailability.ERROR, error.message!!)
+            return Result.failure(error)
+        }
+        if (started && _state.value.availability == TransportAvailability.AVAILABLE) {
+            return Result.success(Unit)
+        }
         val adStarted = runCatching { bleAdvertiser.start() }.getOrDefault(false)
         val scanStarted = runCatching { bleScanner.start() }.getOrDefault(false)
         val serverStarted = runCatching { gattServerManager.start() }.getOrDefault(false)
-        if (serverStarted && (adStarted || scanStarted)) {
+        if (serverStarted && adStarted && scanStarted) {
             started = true
-            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth Active")
+            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth active • advertising, scanning and receiving")
             return Result.success(Unit)
         }
+        bleAdvertiser.stop()
+        bleScanner.stop()
         gattServerManager.stop()
-        val error = Exception("Bluetooth start failed")
+        started = false
+        val missingParts = buildList {
+            if (!adStarted) add("advertising")
+            if (!scanStarted) add("scanning")
+            if (!serverStarted) add("receiving")
+        }.joinToString(", ")
+        val error = Exception("Bluetooth is on, but this phone could not start: $missingParts")
         _state.value = TransportState(kind, TransportAvailability.ERROR, error.message!!)
         return Result.failure(error)
     }

@@ -62,7 +62,10 @@ class PendingMessageRetryWorker @AssistedInject constructor(
             if (current.status == MessageStatus.DELIVERED) continue
             val updated = when (result) {
                 is SendResult.Accepted -> current.copy(
-                    status = DeliveryStatusPolicy.statusFor(result),
+                    status = DeliveryStatusPolicy.merge(
+                        current.status,
+                        DeliveryStatusPolicy.statusFor(result)
+                    ),
                     selectedTransport = result.transport.name
                 ).also { updatedMessage ->
                     if (updatedMessage.status != MessageStatus.DELIVERED) allSuccess = false

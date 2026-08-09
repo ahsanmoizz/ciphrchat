@@ -5,12 +5,15 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.security.PeerKeyStore
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.atomic.AtomicBoolean
 
 sealed interface RustNetworkEvent {
     data class SwarmReady(val peerId: String) : RustNetworkEvent
@@ -28,7 +31,9 @@ class RustP2pManager @Inject constructor(
     private val libraryLoaded: Boolean
     private val _events = MutableSharedFlow<RustNetworkEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<RustNetworkEvent> = _events.asSharedFlow()
-    private val relayReservationReady = MutableStateFlow(false)
+    private val _relayReservationReady = MutableStateFlow(false)
+    val relayReservationReady: StateFlow<Boolean> = _relayReservationReady.asStateFlow()
+    private val swarmStartAccepted = AtomicBoolean(false)
     private val deliveryAwaiter = DeliveryAwaiter()
 
     init {
@@ -49,6 +54,7 @@ class RustP2pManager @Inject constructor(
         if (relayAddress.isBlank()) {
             return Result.failure(IllegalStateException("No CiphrChat relay address is configured"))
         }
+        if (swarmStartAccepted.get()) return Result.success(Unit)
         return runCatching {
             val started = peerKeyStore.withNativeKeyFile { keyFile ->
                 nativeStartSwarm(relayAddress, keyFile)
@@ -56,6 +62,7 @@ class RustP2pManager @Inject constructor(
             check(started) {
                 "Native relay client rejected startup"
             }
+            swarmStartAccepted.set(true)
         }
     }
 
@@ -69,12 +76,14 @@ class RustP2pManager @Inject constructor(
         if (!libraryLoaded) return Result.failure(
             IllegalStateException("Secure network engine is unavailable on this device ABI")
         )
-        if (relayReservationReady.value) return Result.success(Unit)
-        val ready = withTimeoutOrNull(timeoutMs) { relayReservationReady.first { it } } == true
+        if (_relayReservationReady.value) return Result.success(Unit)
+        val ready = withTimeoutOrNull(timeoutMs) { _relayReservationReady.first { it } } == true
         return if (ready) Result.success(Unit) else Result.failure(
             IllegalStateException("Secure relay connection timed out")
         )
     }
+
+    fun hasRelayReservation(): Boolean = _relayReservationReady.value
 
     suspend fun sendMessageAwaitingDelivery(
         peerId: String,
@@ -111,7 +120,7 @@ class RustP2pManager @Inject constructor(
         @JvmStatic
         fun onRelayReservationReady(relayPeerId: String) {
             active?.let { manager ->
-                manager.relayReservationReady.value = true
+                manager._relayReservationReady.value = true
                 manager._events.tryEmit(RustNetworkEvent.RelayReservationReady(relayPeerId))
             }
         }

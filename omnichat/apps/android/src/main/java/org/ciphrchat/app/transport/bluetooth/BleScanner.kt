@@ -28,6 +28,8 @@ class BleScanner @Inject constructor(
 
     private val _discoveredPeers = MutableStateFlow<List<DiscoveredPeer>>(emptyList())
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = _discoveredPeers.asStateFlow()
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
     
     // Map of hardware MAC address -> DiscoveredPeer
     private val discoveredMap = mutableMapOf<String, DiscoveredPeer>()
@@ -36,6 +38,7 @@ class BleScanner @Inject constructor(
     fun start(): Boolean {
         if (isScanning) return true
         val activeScanner = runCatching { scanner }.getOrNull() ?: return false
+        _lastError.value = null
 
         val filter = ScanFilter.Builder()
             .setServiceUuid(BleAdvertiser.OMNICHAT_SERVICE_UUID)
@@ -55,7 +58,8 @@ class BleScanner @Inject constructor(
             }
 
             override fun onScanFailed(errorCode: Int) {
-                // handle failure
+                isScanning = false
+                _lastError.value = "Bluetooth scan failed (Android error $errorCode)"
             }
         }
 
@@ -81,7 +85,7 @@ class BleScanner @Inject constructor(
             id = discoveryToken,
             displayName = "BLE Peer",
             transportKind = TransportKind.BLUETOOTH_DIRECT,
-            reachabilityScore = 70 + (result.rssi + 100), // Simple heuristic for RSSI mapping
+            reachabilityScore = result.rssi,
             lastSeenEpochMs = System.currentTimeMillis()
         )
 
@@ -92,11 +96,11 @@ class BleScanner @Inject constructor(
     }
 
     fun stop() {
-        if (!isScanning) return
         val activeScanner = runCatching { scanner }.getOrNull()
         scanCallback?.let { callback -> runCatching { activeScanner?.stopScan(callback) } }
         isScanning = false
         scanCallback = null
+        _lastError.value = null
         synchronized(mapLock) {
             discoveredMap.clear()
             _discoveredPeers.value = emptyList()

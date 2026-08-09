@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.transport.DiscoveredPeer
@@ -55,6 +56,23 @@ class BluetoothMeshTransportAdapter @Inject constructor(
     private var forwardingJob: Job? = null
     private val forwardingMutex = Mutex()
 
+    init {
+        scope.launch {
+            combine(bluetoothTransportAdapter.state, bluetoothTransportAdapter.nearbyPeers) { direct, peers ->
+                direct to peers.size
+            }.collect { (direct, peerCount) ->
+                if (!started) return@collect
+                _state.value = if (direct.availability != TransportAvailability.AVAILABLE) {
+                    TransportState(kind, direct.availability, direct.detail)
+                } else if (peerCount == 0) {
+                    TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
+                } else {
+                    TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby peer${if (peerCount == 1) "" else "s"}")
+                }
+            }
+        }
+    }
+
     override suspend fun start(): Result<Unit> {
         checkBatteryState()
         if (isBatteryLow) {
@@ -82,7 +100,12 @@ class BluetoothMeshTransportAdapter @Inject constructor(
                 }
             }
         }
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Authenticated Bluetooth mesh forwarding ready")
+        val peerCount = bluetoothTransportAdapter.nearbyPeers.value.size
+        _state.value = if (peerCount == 0) {
+            TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh ready • waiting for nearby CiphrChat peers")
+        } else {
+            TransportState(kind, TransportAvailability.AVAILABLE, "Bluetooth mesh active • $peerCount nearby peer${if (peerCount == 1) "" else "s"}")
+        }
         return Result.success(Unit)
     }
 
