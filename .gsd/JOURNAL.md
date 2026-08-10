@@ -19,3 +19,10 @@
 - Commit `151637a843b7cdefe8bab04b7c266cf544af90e9` passed Android build, lint, JVM unit tests, APK artifact publication, and latest APK publication in [run 31217865760](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865760).
 - The same commit passed Rust formatting, clippy, workspace tests, relay tests, and relay container build in [run 31217865917](https://github.com/ahsanmoizz/ciphrchat/actions/runs/31217865917).
 - `InternetWireCodec` now uses a bounded pure-Kotlin JSON encoder with explicit string escaping, so the JVM test exercises the production encoder without Android framework stubs.
+
+## Internet reconnect and nearby-audio reliability — 2026-08-10
+
+- Before the fix, five consecutive live relay probes each emitted `MailboxUnavailable: Failed to dial the requested peer` before later becoming ready; this reproduced the phone's false mailbox failure.
+- After making mailbox requests connection-aware and retryable, three consecutive encrypted store/fetch/ack round trips against `95.217.129.142:4001` passed without any `MailboxUnavailable` event.
+- Local Rust evidence: `cargo test --workspace` passed all workspace tests, and `cargo clippy --workspace --all-targets -- -D warnings` completed without warnings.
+- Nearby audio now has JVM regression coverage for compressed-envelope round trips and corrupt-frame rejection; Android build/lint/unit evidence will be supplied by the release workflow before publication.

@@ -127,9 +127,10 @@ class InternetTransportAdapter @Inject constructor(
         }
         val contact = contacts.find(recipientId)
             ?: return Reachability.Unreachable("Contact has no Internet invitation")
-        return if (!rustP2pManager.mailboxReady.value) {
-            Reachability.Unreachable("Encrypted offline delivery is still being verified")
-        } else if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
+        if (!rustP2pManager.mailboxReady.value && rustP2pManager.awaitMailboxReady().isFailure) {
+            return Reachability.Unreachable("Encrypted offline delivery is reconnecting")
+        }
+        return if (contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:")) {
             Reachability.Reachable
         } else {
             Reachability.Unreachable("Contact invitation has no Internet peer address")
@@ -140,8 +141,8 @@ class InternetTransportAdapter @Inject constructor(
         if (!started) {
             return SendResult.Failed(IllegalStateException("Internet relay client is not running"))
         }
-        if (!rustP2pManager.mailboxReady.value) {
-            return SendResult.Rejected("Encrypted Internet delivery is still connecting")
+        if (!rustP2pManager.mailboxReady.value && rustP2pManager.awaitMailboxReady().isFailure) {
+            return SendResult.Rejected("Encrypted Internet delivery could not reconnect")
         }
         if (envelope.testOnly) {
             return SendResult.Failed(IllegalStateException("Refusing to send a test-only envelope over the Internet"))

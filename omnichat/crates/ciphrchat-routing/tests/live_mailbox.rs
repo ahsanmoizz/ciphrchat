@@ -7,8 +7,12 @@ async fn wait_for_mailbox(events: &mut mpsc::UnboundedReceiver<ClientEvent>) {
     tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(event) = events.recv().await {
             eprintln!("probe network event: {event:?}");
-            if matches!(event, ClientEvent::MailboxReady) {
-                return;
+            match event {
+                ClientEvent::MailboxReady => return,
+                ClientEvent::MailboxUnavailable { detail } => {
+                    panic!("mailbox reported a false startup failure: {detail}")
+                }
+                _ => {}
             }
         }
         panic!("network event stream ended before mailbox readiness");

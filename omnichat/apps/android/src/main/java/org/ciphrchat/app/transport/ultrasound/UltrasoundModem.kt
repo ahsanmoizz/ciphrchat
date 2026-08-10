@@ -32,10 +32,13 @@ class UltrasoundModem @Inject constructor(
 ) {
     companion object {
         private const val SAMPLE_RATE = 44_100
-        private const val SPACE_FREQUENCY = 18_000.0
-        private const val MARK_FREQUENCY = 19_000.0
-        private const val BAUD_RATE = 400.0
-        private const val AMPLITUDE = 0.22
+        // Many phone speakers and microphones sharply attenuate 18-20 kHz.
+        // This near-ultrasonic pair remains above ordinary speech while being
+        // reproducible across substantially more Android audio hardware.
+        private const val SPACE_FREQUENCY = 15_000.0
+        private const val MARK_FREQUENCY = 17_000.0
+        private const val BAUD_RATE = 500.0
+        private const val AMPLITUDE = 0.35
         private const val MAX_CAPTURE_SECONDS = 30
         private const val SYNC_MATCH_BITS = 48
     }
@@ -160,12 +163,14 @@ class UltrasoundModem @Inject constructor(
         if (count >= capture.size) {
             input.copyInto(capture, 0, count - capture.size, count)
             captureSize = capture.size
+            lastAttemptSize = 0
             return
         }
         if (captureSize + count > capture.size) {
             val keep = capture.size / 2
             capture.copyInto(capture, 0, captureSize - keep, captureSize)
             captureSize = keep
+            lastAttemptSize = 0
         }
         input.copyInto(capture, captureSize, 0, count)
         captureSize += count
@@ -180,7 +185,7 @@ class UltrasoundModem @Inject constructor(
         // begins with silence and AudioRecord reads arbitrary buffer boundaries,
         // so the preamble is almost never at sample zero.
         var foundOffset = -1
-        val phaseStep = maxOf(1, samplesPerBit / 8)
+        val phaseStep = maxOf(1, samplesPerBit / 16)
         phaseSearch@ for (phase in 0 until samplesPerBit step phaseStep) {
             val availableBits = (captureSize - phase) / samplesPerBit
             if (availableBits < minimumBits) continue

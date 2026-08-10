@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
@@ -21,6 +22,7 @@ import java.nio.ByteBuffer
 import org.ciphrchat.app.transport.*
 import org.ciphrchat.app.transport.ultrasound.UltrasoundChunkCodec
 import org.ciphrchat.app.transport.ultrasound.UltrasoundModem
+import org.ciphrchat.app.transport.ultrasound.UltrasoundPayloadCodec
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,6 +47,7 @@ class UltrasoundTransportAdapter @Inject constructor(
     private data class Assembly(val total: Int, val parts: Array<ByteArray?>, var received: Int = 0)
     private val assemblies = mutableMapOf<String, Assembly>()
     private val pendingAcknowledgements = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+    private val completedTransfers = ConcurrentHashMap<String, Long>()
 
     override suspend fun start(): Result<Unit> {
         if (!modem.startListening()) {
@@ -65,6 +68,12 @@ class UltrasoundTransportAdapter @Inject constructor(
                         // Ignore our own speaker echo. Without this guard the
                         // sender could acknowledge itself and falsely report delivery.
                         if (pendingAcknowledgements.containsKey(key)) return@runCatching
+                        val now = System.currentTimeMillis()
+                        completedTransfers.entries.removeIf { now - it.value > COMPLETED_TRANSFER_TTL_MS }
+                        if (completedTransfers.containsKey(key)) {
+                            sendAcknowledgement(chunk.transferId)
+                            return@runCatching
+                        }
                         val assembled = synchronized(assemblies) {
                             val current = assemblies.getOrPut(key) {
                                 Assembly(chunk.total, arrayOfNulls(chunk.total))
@@ -82,10 +91,13 @@ class UltrasoundTransportAdapter @Inject constructor(
                                 current.parts.filterNotNull().fold(ByteArray(0)) { acc, part -> acc + part }
                             } else null
                         } ?: return@runCatching
-                        val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(assembled)))
+                        val decodedPayload = UltrasoundPayloadCodec.decode(assembled)
+                            ?: return@runCatching
+                        val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(decodedPayload)))
                         if (inboundBus.publish(kind, envelope)) {
+                            completedTransfers[key] = now
+                            sendAcknowledgement(chunk.transferId)
                             _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio message received and acknowledged")
-                            modem.transmit(UltrasoundChunkCodec.encodeAcknowledgement(chunk.transferId))
                         }
                     }
                 }
@@ -119,7 +131,7 @@ class UltrasoundTransportAdapter @Inject constructor(
         val bytes = runCatching {
             ByteArrayOutputStream().use { buffer ->
                 DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
-                buffer.toByteArray()
+                UltrasoundPayloadCodec.encode(buffer.toByteArray())
             }
         }.getOrElse { return SendResult.Failed(it) }
         val transferId = ByteBuffer.allocate(16)
@@ -135,27 +147,47 @@ class UltrasoundTransportAdapter @Inject constructor(
             return SendResult.Rejected("Nearby audio envelope is too large")
         }
         return try {
-            for (index in 0 until total) {
-                val start = index * UltrasoundChunkCodec.MAX_CHUNK_BYTES
-                val end = minOf(bytes.size, start + UltrasoundChunkCodec.MAX_CHUNK_BYTES)
-                val frame = UltrasoundChunkCodec.encode(
-                    UltrasoundChunkCodec.Chunk(transferId, index, total, bytes.copyOfRange(start, end))
-                )
-                if (!modem.transmit(frame)) {
-                    return SendResult.Failed(IllegalStateException("Nearby audio transmission failed at chunk ${index + 1}/$total"))
+            repeat(TRANSMISSION_ROUNDS) { round ->
+                for (index in 0 until total) {
+                    val start = index * UltrasoundChunkCodec.MAX_CHUNK_BYTES
+                    val end = minOf(bytes.size, start + UltrasoundChunkCodec.MAX_CHUNK_BYTES)
+                    val frame = UltrasoundChunkCodec.encode(
+                        UltrasoundChunkCodec.Chunk(transferId, index, total, bytes.copyOfRange(start, end))
+                    )
+                    if (!modem.transmit(frame)) {
+                        return SendResult.Failed(IllegalStateException("Nearby audio transmission failed at chunk ${index + 1}/$total"))
+                    }
+                }
+                if (withTimeoutOrNull(ACK_WAIT_MS) { acknowledgement.await() } != null) {
+                    _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio delivery acknowledged by the receiver")
+                    return SendResult.Accepted(kind, "acoustic-acknowledged-$total-frames-round-${round + 1}")
                 }
             }
-            if (withTimeoutOrNull(12_000L) { acknowledgement.await() } == null) {
-                _state.value = TransportState(kind, TransportAvailability.ERROR, "Nearby audio sent no verified receiver acknowledgement")
-                SendResult.Rejected("Nearby audio was sent but no receiver acknowledgement was heard")
-            } else {
-                _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio delivery acknowledged by the receiver")
-                SendResult.Accepted(kind, "acoustic-acknowledged-$total-frames")
-            }
+            _state.value = TransportState(kind, TransportAvailability.ERROR, "Nearby audio sent no verified receiver acknowledgement")
+            SendResult.Rejected("Nearby audio was sent but no receiver acknowledgement was heard")
         } finally {
             pendingAcknowledgements.remove(transferKey)
         }
     }
 
+    private suspend fun sendAcknowledgement(transferId: ByteArray) {
+        // Let the sender's final tone finish, then repeat the short ACK so a
+        // single microphone buffer loss cannot leave both phones yellow.
+        delay(ACK_TURNAROUND_MS)
+        repeat(ACK_REPETITIONS) {
+            modem.transmit(UltrasoundChunkCodec.encodeAcknowledgement(transferId))
+            delay(ACK_GAP_MS)
+        }
+    }
+
     private fun ByteArray.key(): String = joinToString("") { byte -> "%02x".format(byte) }
+
+    private companion object {
+        const val TRANSMISSION_ROUNDS = 2
+        const val ACK_WAIT_MS = 6_000L
+        const val ACK_TURNAROUND_MS = 350L
+        const val ACK_GAP_MS = 200L
+        const val ACK_REPETITIONS = 2
+        const val COMPLETED_TRANSFER_TTL_MS = 2 * 60_000L
+    }
 }

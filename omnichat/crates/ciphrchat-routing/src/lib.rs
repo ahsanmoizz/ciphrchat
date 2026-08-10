@@ -2,15 +2,20 @@ use libp2p::{
     dcutr, identify, identity, noise, relay,
     request_response::{self, cbor, Message, ProtocolSupport},
     swarm::{NetworkBehaviour, StreamProtocol, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, SwarmBuilder,
+    tcp, yamux, Multiaddr, PeerId, Swarm, SwarmBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, error::Error, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    error::Error,
+    time::Duration,
+};
 use tokio::sync::mpsc;
 
 const MESSAGE_PROTOCOL: &str = "/ciphrchat/message/1";
 const MAILBOX_PROTOCOL: &str = "/ciphrchat/mailbox/1";
 const MAILBOX_FETCH_LIMIT: u16 = 16;
+const MAILBOX_MAX_ATTEMPTS: u8 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireMessage {
@@ -146,11 +151,89 @@ struct DeliveryTracker {
     failures: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum PendingMailboxRequest {
-    Put { message_id: String },
-    Fetch,
-    Ack,
+    Put {
+        recipient_peer_id: String,
+        message_id: String,
+        payload: Vec<u8>,
+        expires_at_epoch_ms: u64,
+        attempts: u8,
+    },
+    Fetch {
+        attempts: u8,
+    },
+    Ack {
+        message_id: String,
+        attempts: u8,
+    },
+}
+
+impl PendingMailboxRequest {
+    fn request(&self) -> MailboxRequest {
+        match self {
+            Self::Put {
+                recipient_peer_id,
+                message_id,
+                payload,
+                expires_at_epoch_ms,
+                ..
+            } => MailboxRequest::Put {
+                recipient_peer_id: recipient_peer_id.clone(),
+                message_id: message_id.clone(),
+                payload: payload.clone(),
+                expires_at_epoch_ms: *expires_at_epoch_ms,
+            },
+            Self::Fetch { .. } => MailboxRequest::Fetch {
+                limit: MAILBOX_FETCH_LIMIT,
+            },
+            Self::Ack { message_id, .. } => MailboxRequest::Ack {
+                message_id: message_id.clone(),
+            },
+        }
+    }
+
+    fn retry(self) -> Option<Self> {
+        match self {
+            Self::Put {
+                recipient_peer_id,
+                message_id,
+                payload,
+                expires_at_epoch_ms,
+                attempts,
+            } if attempts + 1 < MAILBOX_MAX_ATTEMPTS => Some(Self::Put {
+                recipient_peer_id,
+                message_id,
+                payload,
+                expires_at_epoch_ms,
+                attempts: attempts + 1,
+            }),
+            Self::Fetch { attempts } if attempts + 1 < MAILBOX_MAX_ATTEMPTS => Some(Self::Fetch {
+                attempts: attempts + 1,
+            }),
+            Self::Ack {
+                message_id,
+                attempts,
+            } if attempts + 1 < MAILBOX_MAX_ATTEMPTS => Some(Self::Ack {
+                message_id,
+                attempts: attempts + 1,
+            }),
+            _ => None,
+        }
+    }
+}
+
+fn send_mailbox_request(
+    swarm: &mut Swarm<CiphrChatBehaviour>,
+    relay_peer_id: &PeerId,
+    pending: &mut HashMap<request_response::OutboundRequestId, PendingMailboxRequest>,
+    operation: PendingMailboxRequest,
+) {
+    let request_id = swarm
+        .behaviour_mut()
+        .mailbox
+        .send_request(relay_peer_id, operation.request());
+    pending.insert(request_id, operation);
 }
 
 fn relay_peer_id(address: &Multiaddr) -> Option<PeerId> {
@@ -252,15 +335,20 @@ pub async fn run_client(
         .with(libp2p::multiaddr::Protocol::P2pCircuit);
     swarm.listen_on(relay_listener)?;
     swarm.add_peer_address(relay_peer_id, relay_address.clone());
-    swarm.dial(relay_address)?;
+    swarm.dial(relay_address.clone())?;
 
     let mut pending_direct: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     let mut pending_mailbox: HashMap<request_response::OutboundRequestId, PendingMailboxRequest> =
         HashMap::new();
+    let mut queued_mailbox = VecDeque::new();
     let mut deliveries: HashMap<String, DeliveryTracker> = HashMap::new();
+    let mut relay_connected = false;
+    let mut relay_dial_pending = true;
     let mut mailbox_fetch_pending = false;
     let mut mailbox_poll = tokio::time::interval(Duration::from_secs(10));
     mailbox_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut relay_retry = tokio::time::interval(Duration::from_secs(2));
+    relay_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let _ = events.send(ClientEvent::Ready {
         peer_id: local_peer_id,
     });
@@ -288,39 +376,70 @@ pub async fn run_client(
                         WireMessage { payload: payload.clone() },
                     );
                     pending_direct.insert(direct_request_id, message_id.clone());
-                    let mailbox_request_id = swarm.behaviour_mut().mailbox.send_request(
-                        &relay_peer_id,
-                        MailboxRequest::Put {
-                            recipient_peer_id: peer_id.to_string(),
-                            message_id: message_id.clone(),
-                            payload,
-                            expires_at_epoch_ms,
-                        },
-                    );
-                    pending_mailbox.insert(mailbox_request_id, PendingMailboxRequest::Put { message_id: message_id.clone() });
+                    let mailbox_operation = PendingMailboxRequest::Put {
+                        recipient_peer_id: peer_id.to_string(),
+                        message_id: message_id.clone(),
+                        payload,
+                        expires_at_epoch_ms,
+                        attempts: 0,
+                    };
                     deliveries.insert(message_id, DeliveryTracker {
                         peer_id,
                         direct_pending: true,
                         mailbox_pending: true,
                         failures: Vec::new(),
                     });
+                    if relay_connected {
+                        send_mailbox_request(
+                            &mut swarm,
+                            &relay_peer_id,
+                            &mut pending_mailbox,
+                            mailbox_operation,
+                        );
+                    } else {
+                        queued_mailbox.push_back(mailbox_operation);
+                    }
                 }
                 Some(SwarmCommand::AcknowledgeMailbox { message_id }) => {
-                    let request_id = swarm.behaviour_mut().mailbox.send_request(
-                        &relay_peer_id,
-                        MailboxRequest::Ack { message_id },
-                    );
-                    pending_mailbox.insert(request_id, PendingMailboxRequest::Ack);
+                    let operation = PendingMailboxRequest::Ack { message_id, attempts: 0 };
+                    if relay_connected {
+                        send_mailbox_request(
+                            &mut swarm,
+                            &relay_peer_id,
+                            &mut pending_mailbox,
+                            operation,
+                        );
+                    } else {
+                        queued_mailbox.push_back(operation);
+                    }
                 }
                 None => break,
             },
-            _ = mailbox_poll.tick(), if !mailbox_fetch_pending => {
-                let request_id = swarm.behaviour_mut().mailbox.send_request(
+            _ = mailbox_poll.tick(), if relay_connected && !mailbox_fetch_pending => {
+                send_mailbox_request(
+                    &mut swarm,
                     &relay_peer_id,
-                    MailboxRequest::Fetch { limit: MAILBOX_FETCH_LIMIT },
+                    &mut pending_mailbox,
+                    PendingMailboxRequest::Fetch { attempts: 0 },
                 );
-                pending_mailbox.insert(request_id, PendingMailboxRequest::Fetch);
                 mailbox_fetch_pending = true;
+            }
+            _ = relay_retry.tick() => {
+                if relay_connected {
+                    if let Some(operation) = queued_mailbox.pop_front() {
+                        send_mailbox_request(
+                            &mut swarm,
+                            &relay_peer_id,
+                            &mut pending_mailbox,
+                            operation,
+                        );
+                    }
+                } else if !relay_dial_pending {
+                    swarm.add_peer_address(relay_peer_id, relay_address.clone());
+                    if swarm.dial(relay_address.clone()).is_ok() {
+                        relay_dial_pending = true;
+                    }
+                }
             }
             event = futures::StreamExt::next(&mut swarm) => match event {
                 Some(SwarmEvent::Behaviour(CiphrChatBehaviourEvent::Messages(event))) => {
@@ -375,7 +494,7 @@ pub async fn run_client(
                             Message::Response { request_id, response } => {
                                 if let Some(pending_request) = pending_mailbox.remove(&request_id) {
                                     match pending_request {
-                                        PendingMailboxRequest::Put { message_id } => match response {
+                                        PendingMailboxRequest::Put { message_id, .. } => match response {
                                             MailboxResponse::Stored => {
                                                 let _ = events.send(ClientEvent::MailboxReady);
                                                 complete_delivery(
@@ -393,7 +512,7 @@ pub async fn run_client(
                                                 &message_id, false, Some("mailbox returned an invalid response".to_owned()), true, &mut deliveries, &events,
                                             ),
                                         },
-                                        PendingMailboxRequest::Fetch => {
+                                        PendingMailboxRequest::Fetch { .. } => {
                                             mailbox_fetch_pending = false;
                                             match response {
                                                 MailboxResponse::Messages(messages) => {
@@ -426,7 +545,7 @@ pub async fn run_client(
                                                 }
                                             }
                                         }
-                                        PendingMailboxRequest::Ack => {}
+                                        PendingMailboxRequest::Ack { .. } => {}
                                     }
                                 }
                             }
@@ -434,22 +553,31 @@ pub async fn run_client(
                         },
                         request_response::Event::OutboundFailure { request_id, error, .. } => {
                             if let Some(pending_request) = pending_mailbox.remove(&request_id) {
-                                match pending_request {
-                                    PendingMailboxRequest::Put { message_id } => complete_delivery(
-                                        &message_id,
-                                        false,
-                                        Some(format!("encrypted mailbox unavailable: {error}")),
-                                        true,
-                                        &mut deliveries,
-                                        &events,
-                                    ),
-                                    PendingMailboxRequest::Fetch => {
-                                        mailbox_fetch_pending = false;
-                                        let _ = events.send(ClientEvent::MailboxUnavailable {
-                                            detail: format!("encrypted mailbox unavailable: {error}"),
-                                        });
+                                let detail = format!("encrypted mailbox unavailable: {error}");
+                                if let Some(retry) = pending_request.clone().retry() {
+                                    queued_mailbox.push_back(retry);
+                                    if matches!(error, request_response::OutboundFailure::DialFailure | request_response::OutboundFailure::ConnectionClosed) {
+                                        relay_connected = false;
+                                        relay_dial_pending = false;
                                     }
-                                    PendingMailboxRequest::Ack => {}
+                                } else {
+                                    match pending_request {
+                                        PendingMailboxRequest::Put { message_id, .. } => complete_delivery(
+                                            &message_id,
+                                            false,
+                                            Some(detail.clone()),
+                                            true,
+                                            &mut deliveries,
+                                            &events,
+                                        ),
+                                        PendingMailboxRequest::Fetch { .. } => {
+                                            mailbox_fetch_pending = false;
+                                            let _ = events.send(ClientEvent::MailboxUnavailable {
+                                                detail: detail.clone(),
+                                            });
+                                        }
+                                        PendingMailboxRequest::Ack { .. } => {}
+                                    }
                                 }
                             }
                         }
@@ -463,9 +591,19 @@ pub async fn run_client(
                     }
                 }
                 Some(SwarmEvent::ConnectionEstablished { peer_id, .. }) if peer_id == relay_peer_id => {
+                    relay_connected = true;
+                    relay_dial_pending = false;
                     let _ = events.send(ClientEvent::RelayConnected { relay_peer_id: peer_id });
                 }
+                Some(SwarmEvent::ConnectionClosed { peer_id, num_established, .. }) if peer_id == relay_peer_id => {
+                    relay_connected = num_established > 0;
+                    relay_dial_pending = false;
+                }
                 Some(SwarmEvent::OutgoingConnectionError { peer_id, error, .. }) => {
+                    if peer_id == Some(relay_peer_id) {
+                        relay_connected = false;
+                        relay_dial_pending = false;
+                    }
                     let detail = match peer_id {
                         Some(peer_id) => format!("connection to {peer_id} failed: {error}"),
                         None => format!("outgoing connection failed: {error}"),

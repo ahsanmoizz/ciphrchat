@@ -2,6 +2,12 @@
 
 All notable changes to OmniChat will be documented in this file.
 
+## [0.1.0-dev.11] - 2026-08-10
+
+### Fixed
+- Conventional Internet waits for the relay connection before probing the encrypted mailbox and retries mailbox work across network changes instead of reporting a false dial failure.
+- Nearby audio compresses secure envelopes, uses a wider-supported acoustic band, retries a missed transfer, and repeats receiver acknowledgements while keeping success verification strict.
+
 ## [0.1.0-dev.10] - 2026-08-10
 
 ### Fixed

@@ -98,6 +98,17 @@ class RustP2pManager @Inject constructor(
         )
     }
 
+    suspend fun awaitMailboxReady(timeoutMs: Long = 20_000L): Result<Unit> {
+        if (!libraryLoaded) return Result.failure(
+            IllegalStateException("Secure network engine is unavailable on this device ABI")
+        )
+        if (_mailboxReady.value) return Result.success(Unit)
+        val ready = withTimeoutOrNull(timeoutMs) { _mailboxReady.first { it } } == true
+        return if (ready) Result.success(Unit) else Result.failure(
+            IllegalStateException("Encrypted Internet delivery could not reconnect")
+        )
+    }
+
     fun hasRelayReservation(): Boolean = _relayReservationReady.value
 
     suspend fun sendMessageAwaitingDelivery(
