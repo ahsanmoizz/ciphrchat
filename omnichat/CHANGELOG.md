@@ -2,7 +2,7 @@
 
 All notable changes to OmniChat will be documented in this file.
 
-## [0.1.0-dev.9] - 2026-08-10
+## [0.1.0-dev.10] - 2026-08-10
 
 ### Fixed
 - Conventional Internet delivery now uses the encrypted relay mailbox without requiring an optional circuit reservation.

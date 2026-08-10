@@ -176,20 +176,33 @@ class UltrasoundModem @Inject constructor(
         val minimumBits = preambleBits + 8
         if (captureSize < minimumBits * samplesPerBit) return
 
-        // Search the start phase in small steps. The long 0x55 preamble makes
-        // this tolerant of independent microphone/audio-clock start times.
-        val maxOffset = samplesPerBit - 1
+        // Search the captured window, not just the first symbol. Transmission
+        // begins with silence and AudioRecord reads arbitrary buffer boundaries,
+        // so the preamble is almost never at sample zero.
         var foundOffset = -1
-        for (offset in 0..maxOffset step 4) {
-            var matches = 0
-            for (bit in 0 until preambleBits) {
-                val actual = classifyBit(offset + bit * samplesPerBit)
-                val expected = (UltrasoundFrameCodec.PREAMBLE_BYTES[bit / 8].toInt() ushr (bit % 8)) and 1
-                if (actual == expected) matches++
+        val phaseStep = maxOf(1, samplesPerBit / 8)
+        phaseSearch@ for (phase in 0 until samplesPerBit step phaseStep) {
+            val availableBits = (captureSize - phase) / samplesPerBit
+            if (availableBits < minimumBits) continue
+            val decoded = IntArray(availableBits) { bit ->
+                classifyBit(phase + bit * samplesPerBit)
             }
-            if (matches >= SYNC_MATCH_BITS) {
-                foundOffset = offset
-                break
+            for (startBit in 0..(availableBits - minimumBits)) {
+                var quickMatches = 0
+                for (bit in 0 until 16) {
+                    val expected = (UltrasoundFrameCodec.PREAMBLE_BYTES[bit / 8].toInt() ushr (bit % 8)) and 1
+                    if (decoded[startBit + bit] == expected) quickMatches++
+                }
+                if (quickMatches < 14) continue
+                var matches = 0
+                for (bit in 0 until preambleBits) {
+                    val expected = (UltrasoundFrameCodec.PREAMBLE_BYTES[bit / 8].toInt() ushr (bit % 8)) and 1
+                    if (decoded[startBit + bit] == expected) matches++
+                }
+                if (matches >= SYNC_MATCH_BITS) {
+                    foundOffset = phase + startBit * samplesPerBit
+                    break@phaseSearch
+                }
             }
         }
         if (foundOffset < 0) {
@@ -198,6 +211,7 @@ class UltrasoundModem @Inject constructor(
             if (captureSize > keep) {
                 capture.copyInto(capture, 0, captureSize - keep, captureSize)
                 captureSize = keep
+                lastAttemptSize = captureSize
             }
             return
         }
@@ -248,9 +262,11 @@ class UltrasoundModem @Inject constructor(
         if (count <= 0) return
         if (count >= captureSize) {
             captureSize = 0
+            lastAttemptSize = 0
             return
         }
         capture.copyInto(capture, 0, count, captureSize)
         captureSize -= count
+        lastAttemptSize = captureSize
     }
 }
