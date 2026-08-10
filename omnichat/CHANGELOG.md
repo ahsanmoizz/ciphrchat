@@ -2,6 +2,16 @@
 
 All notable changes to OmniChat will be documented in this file.
 
+## [0.1.0-dev.12] - 2026-08-10
+
+### Fixed
+- Bluetooth advertising now starts only after the receive service is registered; GATT uses BLE explicitly, validates every acknowledged frame, and retries one transient connection failure.
+- Bluetooth mesh benefits from the same verified neighbor write path.
+
+### Added
+- In-chat message and attachment-name search.
+- Clear-chat action with confirmation and deletion of that conversation's locally stored attachments.
+
 ## [0.1.0-dev.11] - 2026-08-10
 
 ### Fixed

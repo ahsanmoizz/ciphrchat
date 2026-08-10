@@ -70,6 +70,13 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
         return target
     }
 
+    fun delete(path: String): Boolean {
+        val attachmentRoot = File(context.filesDir, "CiphrChat/attachments").canonicalFile
+        val target = File(path).canonicalFile
+        if (target.parentFile != attachmentRoot) return false
+        return !target.exists() || target.delete()
+    }
+
     private fun key(): SecretKey {
         val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }

@@ -8,4 +8,5 @@ interface MessageRepository {
     fun messages(conversationId: String): Flow<List<ChatMessage>>
     suspend fun send(conversationId: String, recipientId: String, text: String): Result<ChatMessage>
     suspend fun sendAttachment(conversationId: String, recipientId: String, uri: Uri): Result<ChatMessage>
+    suspend fun clearConversation(conversationId: String): Result<Int>
 }

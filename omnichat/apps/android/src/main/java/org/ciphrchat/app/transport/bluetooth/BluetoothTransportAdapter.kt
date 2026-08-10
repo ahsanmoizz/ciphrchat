@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.ciphrchat.app.transport.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -109,9 +110,11 @@ class BluetoothTransportAdapter @Inject constructor(
         if (started) {
             return Result.success(Unit)
         }
-        val adStarted = runCatching { bleAdvertiser.start() }.getOrDefault(false)
-        val scanStarted = runCatching { bleScanner.start() }.getOrDefault(false)
         val serverStarted = runCatching { gattServerManager.start() }.getOrDefault(false)
+        // Do not advertise a connectable peer until its receive service is
+        // registered. Otherwise scanners can count a peer that cannot accept a frame.
+        val adStarted = serverStarted && runCatching { bleAdvertiser.start() }.getOrDefault(false)
+        val scanStarted = serverStarted && runCatching { bleScanner.start() }.getOrDefault(false)
         if (serverStarted && adStarted && scanStarted) {
             started = true
             _state.value = TransportState(kind, TransportAvailability.STARTING, "Bluetooth ready • scanning for nearby CiphrChat peers")
@@ -161,14 +164,29 @@ class BluetoothTransportAdapter @Inject constructor(
             DataOutputStream(buffer).use { out -> TransportWireCodec.write(out, envelope) }
             buffer.toByteArray()
         }
-        return sendFramedToDevice(deviceMac, payload, GattServerManager.GATT_CHARACTERISTIC_UUID, "ble-gatt-frame")
+        return sendPayloadWithRetry(deviceMac, payload, GattServerManager.GATT_CHARACTERISTIC_UUID, "ble-gatt-frame")
     }
 
     suspend fun sendControlToDevice(deviceMac: String, payload: ByteArray): SendResult =
-        sendFramedToDevice(deviceMac, payload, GattServerManager.CONTROL_CHARACTERISTIC_UUID, "ble-gatt-control")
+        sendPayloadWithRetry(deviceMac, payload, GattServerManager.CONTROL_CHARACTERISTIC_UUID, "ble-gatt-control")
 
     suspend fun deviceAddressForRecipient(recipientId: String): String? =
         bleScanner.deviceAddressFor(discoveryTokenFor(recipientId))
+
+    private suspend fun sendPayloadWithRetry(
+        deviceMac: String,
+        payload: ByteArray,
+        characteristicUuid: java.util.UUID,
+        routeId: String
+    ): SendResult {
+        var lastResult: SendResult = SendResult.Rejected("Bluetooth send did not start")
+        repeat(GATT_SEND_ATTEMPTS) { attempt ->
+            lastResult = sendFramedToDevice(deviceMac, payload, characteristicUuid, routeId)
+            if (lastResult is SendResult.Accepted) return lastResult
+            if (attempt + 1 < GATT_SEND_ATTEMPTS) delay(GATT_RETRY_DELAY_MS)
+        }
+        return lastResult
+    }
 
     private suspend fun sendFramedToDevice(
         deviceMac: String,
@@ -276,18 +294,25 @@ class BluetoothTransportAdapter @Inject constructor(
                 
                 offset += take
                 
-                characteristic.value = chunk
                 // Use acknowledged writes: every chunk advances only after the
                 // receiver confirms it, preventing silent loss on busy phones.
-                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                if (!g.writeCharacteristic(characteristic)) {
+                val writeAccepted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    g.writeCharacteristic(
+                        characteristic,
+                        chunk,
+                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    ) == BluetoothStatusCodes.SUCCESS
+                } else {
+                    writeLegacyCharacteristic(g, characteristic, chunk)
+                }
+                if (!writeAccepted) {
                     complete(SendResult.Failure(Exception("Bluetooth rejected GATT write")))
                     g.disconnect()
                 }
             }
         }
 
-        gatt = device.connectGatt(context, false, gattCallback)
+        gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         cont.invokeOnCancellation {
             gatt?.disconnect()
             gatt?.close()
@@ -296,6 +321,17 @@ class BluetoothTransportAdapter @Inject constructor(
         } ?: SendResult.Failure(IllegalStateException("Bluetooth send timed out"))
 
     fun hasDiscoveredPeers(): Boolean = bleScanner.discoveredDeviceAddresses().isNotEmpty()
+
+    @Suppress("DEPRECATION")
+    private fun writeLegacyCharacteristic(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray
+    ): Boolean {
+        characteristic.value = value
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        return gatt.writeCharacteristic(characteristic)
+    }
 
     suspend fun broadcastEnvelope(envelope: OutboundEnvelope): SendResult {
         val peers = bleScanner.discoveredDeviceAddresses()
@@ -336,5 +372,10 @@ class BluetoothTransportAdapter @Inject constructor(
         val contact = contacts.find(recipientId)
         return contact?.discoveryToken?.ifBlank { ContactDiscoveryToken.forContactId(recipientId) }
             ?: ContactDiscoveryToken.forContactId(recipientId)
+    }
+
+    private companion object {
+        const val GATT_SEND_ATTEMPTS = 2
+        const val GATT_RETRY_DELAY_MS = 750L
     }
 }

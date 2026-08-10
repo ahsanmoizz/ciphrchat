@@ -26,3 +26,9 @@
 - After making mailbox requests connection-aware and retryable, three consecutive encrypted store/fetch/ack round trips against `95.217.129.142:4001` passed without any `MailboxUnavailable` event.
 - Local Rust evidence: `cargo test --workspace` passed all workspace tests, and `cargo clippy --workspace --all-targets -- -D warnings` completed without warnings.
 - Nearby audio now has JVM regression coverage for compressed-envelope round trips and corrupt-frame rejection; Android build/lint/unit evidence will be supplied by the release workflow before publication.
+
+## Bluetooth delivery and chat controls — 2026-08-10
+
+- Discovery correctly counted the peer, but the receive GATT service was advertised before Android confirmed service registration; the client also used automatic Bluetooth transport and the server returned write success before frame validation.
+- The scoped fix registers the GATT service first, connects explicitly over BLE, validates each acknowledged chunk/full frame before success, and retries one transient GATT failure. Internet and Wi-Fi/LAN source files were not modified.
+- Added conversation deletion through Room with app-private attachment cleanup, plus local in-chat filtering by message text or attachment name.

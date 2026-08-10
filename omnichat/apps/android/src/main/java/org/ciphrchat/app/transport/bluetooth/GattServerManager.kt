@@ -15,6 +15,8 @@ import java.io.DataInputStream
 import org.ciphrchat.app.transport.TransportInboundBus
 import org.ciphrchat.app.transport.TransportKind
 import org.ciphrchat.app.transport.TransportWireCodec
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 @Singleton
 @SuppressLint("MissingPermission")
@@ -27,11 +29,13 @@ class GattServerManager @Inject constructor(
         val GATT_CHARACTERISTIC_UUID: UUID = UUID.fromString("0000FF03-0000-1000-8000-00805F9B34FB")
         val CONTROL_CHARACTERISTIC_UUID: UUID = UUID.fromString("0000FF04-0000-1000-8000-00805F9B34FB")
         const val MAX_FRAME_BYTES = 1 * 1024 * 1024
+        private const val SERVICE_START_TIMEOUT_MS = 5_000L
     }
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
     private var gattServer: BluetoothGattServer? = null
     private var started = false
+    private var serviceStart: CompletableDeferred<Boolean>? = null
 
     private val _incomingData = MutableSharedFlow<ByteArray>(extraBufferCapacity = 10)
     val incomingData: SharedFlow<ByteArray> = _incomingData.asSharedFlow()
@@ -46,7 +50,7 @@ class GattServerManager @Inject constructor(
     private val controlAssemblyBuffers = mutableMapOf<String, ByteArrayOutputStream>()
     private val controlExpectedLengths = mutableMapOf<String, Int>()
 
-    fun start(): Boolean {
+    suspend fun start(): Boolean {
         if (started && gattServer != null) return true
         val manager = bluetoothManager ?: return false
 
@@ -67,7 +71,12 @@ class GattServerManager @Inject constructor(
                 BluetoothGattCharacteristic.PERMISSION_WRITE
             )
         )
-        val added = runCatching { gattServer?.addService(service) == true }.getOrDefault(false)
+        val pending = CompletableDeferred<Boolean>()
+        serviceStart = pending
+        val accepted = runCatching { gattServer?.addService(service) == true }.getOrDefault(false)
+        if (!accepted) pending.complete(false)
+        val added = withTimeoutOrNull(SERVICE_START_TIMEOUT_MS) { pending.await() } == true
+        serviceStart = null
         started = added
         if (!added) {
             runCatching { gattServer?.close() }
@@ -78,6 +87,8 @@ class GattServerManager @Inject constructor(
 
     fun stop() {
         started = false
+        serviceStart?.complete(false)
+        serviceStart = null
         gattServer?.close()
         gattServer = null
         assemblyBuffers.clear()
@@ -87,6 +98,12 @@ class GattServerManager @Inject constructor(
     }
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
+        override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+            if (service.uuid == GATT_SERVICE_UUID) {
+                serviceStart?.complete(status == BluetoothGatt.GATT_SUCCESS)
+            }
+        }
+
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 assemblyBuffers.remove(device.address)
@@ -108,38 +125,46 @@ class GattServerManager @Inject constructor(
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
             
             if (characteristic.uuid == GATT_CHARACTERISTIC_UUID || characteristic.uuid == CONTROL_CHARACTERISTIC_UUID) {
-                if (responseNeeded) {
-                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
-                }
-                
-                if (characteristic.uuid == GATT_CHARACTERISTIC_UUID) {
+                val accepted = !preparedWrite && offset == 0 && if (characteristic.uuid == GATT_CHARACTERISTIC_UUID) {
                     processIncomingChunk(device.address, value)
                 } else {
                     processIncomingControlChunk(device.address, value)
+                }
+                if (responseNeeded) {
+                    gattServer?.sendResponse(
+                        device,
+                        requestId,
+                        if (accepted) BluetoothGatt.GATT_SUCCESS else BluetoothGatt.GATT_FAILURE,
+                        0,
+                        null
+                    )
                 }
             }
         }
     }
 
-    private fun processIncomingControlChunk(deviceAddress: String, chunk: ByteArray) {
-        if (chunk.isEmpty()) return
-        when (chunk[0].toInt()) {
+    private fun processIncomingControlChunk(deviceAddress: String, chunk: ByteArray): Boolean {
+        if (chunk.isEmpty()) return false
+        return when (chunk[0].toInt()) {
             1 -> if (chunk.size >= 5) {
                 val length = ((chunk[1].toInt() and 0xFF) shl 24) or
                     ((chunk[2].toInt() and 0xFF) shl 16) or
                     ((chunk[3].toInt() and 0xFF) shl 8) or
                     (chunk[4].toInt() and 0xFF)
-                if (length !in 1..64 * 1024) return
+                if (length !in 1..64 * 1024) return false
                 controlExpectedLengths[deviceAddress] = length
                 controlAssemblyBuffers[deviceAddress] = ByteArrayOutputStream().also {
                     it.write(chunk, 5, chunk.size - 5)
                 }
                 checkControlComplete(deviceAddress)
-            }
+                true
+            } else false
             2 -> controlAssemblyBuffers[deviceAddress]?.let {
                 it.write(chunk, 1, chunk.size - 1)
                 checkControlComplete(deviceAddress)
-            }
+                true
+            } ?: false
+            else -> false
         }
     }
 
@@ -152,13 +177,13 @@ class GattServerManager @Inject constructor(
         controlExpectedLengths.remove(deviceAddress)
     }
 
-    private fun processIncomingChunk(deviceAddress: String, chunk: ByteArray) {
-        if (chunk.isEmpty()) return
+    private fun processIncomingChunk(deviceAddress: String, chunk: ByteArray): Boolean {
+        if (chunk.isEmpty()) return false
         
         // 1st byte: 0x01 (start frame) + 4-byte length, or 0x02 (continuation).
         
         val type = chunk[0]
-        when (type.toInt()) {
+        return when (type.toInt()) {
             1 -> {
                 if (chunk.size >= 5) {
                     val length = ((chunk[1].toInt() and 0xFF) shl 24) or
@@ -169,7 +194,7 @@ class GattServerManager @Inject constructor(
                     if (length !in 1..MAX_FRAME_BYTES) {
                         assemblyBuffers.remove(deviceAddress)
                         expectedLengths.remove(deviceAddress)
-                        return
+                        return false
                     }
                     expectedLengths[deviceAddress] = length
                     val buffer = ByteArrayOutputStream()
@@ -177,36 +202,40 @@ class GattServerManager @Inject constructor(
                     assemblyBuffers[deviceAddress] = buffer
                     
                     checkBufferComplete(deviceAddress)
-                }
+                } else false
             }
             2 -> {
                 val buffer = assemblyBuffers[deviceAddress]
                 if (buffer != null) {
                     buffer.write(chunk, 1, chunk.size - 1)
                     checkBufferComplete(deviceAddress)
-                }
+                } else false
             }
+            else -> false
         }
     }
 
-    private fun checkBufferComplete(deviceAddress: String) {
-        val buffer = assemblyBuffers[deviceAddress] ?: return
-        val expected = expectedLengths[deviceAddress] ?: return
+    private fun checkBufferComplete(deviceAddress: String): Boolean {
+        val buffer = assemblyBuffers[deviceAddress] ?: return false
+        val expected = expectedLengths[deviceAddress] ?: return false
         
         if (buffer.size() >= expected) {
             val fullPayload = buffer.toByteArray()
             val frame = fullPayload.copyOf(expected)
             _incomingData.tryEmit(frame)
-            runCatching {
+            val accepted = runCatching {
                 val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(frame)))
                 inboundBus.publish(TransportKind.BLUETOOTH_DIRECT, envelope)
-            }
+            }.getOrDefault(false)
             assemblyBuffers.remove(deviceAddress)
             expectedLengths.remove(deviceAddress)
+            return accepted
         } else if (buffer.size() > MAX_FRAME_BYTES) {
             assemblyBuffers.remove(deviceAddress)
             expectedLengths.remove(deviceAddress)
+            return false
         }
+        return true
     }
 
 }

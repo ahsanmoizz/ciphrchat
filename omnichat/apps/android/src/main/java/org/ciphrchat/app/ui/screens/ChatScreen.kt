@@ -9,6 +9,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +42,9 @@ fun ChatScreen(
     val resolvedContactName by viewModel.contactName.collectAsState()
     val notice by viewModel.notice.collectAsState()
     var inputText by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchVisible by remember { mutableStateOf(false) }
+    var showClearConfirmation by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val currentLocale = LocalConfiguration.current.locales[0]
     val context = LocalContext.current
@@ -46,27 +52,64 @@ fun ChatScreen(
         uri?.let(viewModel::sendAttachment)
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    val visibleMessages = remember(messages, searchQuery) {
+        val query = searchQuery.trim()
+        if (query.isEmpty()) messages else messages.filter { message ->
+            message.body.contains(query, ignoreCase = true) ||
+                message.attachmentFileName?.contains(query, ignoreCase = true) == true
+        }
+    }
+
+    LaunchedEffect(visibleMessages.size, searchQuery) {
+        if (searchQuery.isBlank() && visibleMessages.isNotEmpty()) {
+            listState.animateScrollToItem(visibleMessages.size - 1)
+        }
     }
 
     Scaffold(
         containerColor = CiphrBackground,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(resolvedContactName ?: contactName, color = CiphrText)
-                        Text("Secure conversation", style = MaterialTheme.typography.labelMedium, color = CiphrTextSecondary)
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = CiphrText)
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = CiphrSurface)
-            )
+            Column(Modifier.background(CiphrSurface)) {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(resolvedContactName ?: contactName, color = CiphrText)
+                            Text("Secure conversation", style = MaterialTheme.typography.labelMedium, color = CiphrTextSecondary)
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = CiphrText)
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) searchQuery = "" }) {
+                            Icon(if (searchVisible) Icons.Default.Close else Icons.Default.Search, if (searchVisible) "Close search" else "Search messages", tint = CiphrText)
+                        }
+                        IconButton(onClick = { showClearConfirmation = true }, enabled = messages.isNotEmpty()) {
+                            Icon(Icons.Default.Delete, "Clear chat", tint = CiphrText)
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = CiphrSurface)
+                )
+                if (searchVisible) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Search this chat") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, "Clear search")
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
         },
         bottomBar = {
             Row(
@@ -100,7 +143,12 @@ fun ChatScreen(
                     Text(message, color = CiphrDanger, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            items(messages, key = { it.id }) { message ->
+            if (searchQuery.isNotBlank() && visibleMessages.isEmpty()) {
+                item {
+                    Text("No messages found", color = CiphrTextSecondary, modifier = Modifier.padding(vertical = 24.dp))
+                }
+            }
+            items(visibleMessages, key = { it.id }) { message ->
                 CiphrMessageBubble(
                     text = message.body,
                     time = SimpleDateFormat("HH:mm", currentLocale).format(Date(message.createdAtEpochMs)),
@@ -126,5 +174,23 @@ fun ChatScreen(
                 )
             }
         }
+    }
+
+    if (showClearConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmation = false },
+            title = { Text("Clear this chat?") },
+            text = { Text("All messages and locally saved attachments in this conversation will be permanently removed from this device.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearConfirmation = false
+                    searchQuery = ""
+                    viewModel.clearChat()
+                }) { Text("Clear chat", color = CiphrDanger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmation = false }) { Text("Cancel") }
+            }
+        )
     }
 }

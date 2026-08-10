@@ -156,6 +156,19 @@ class PersistentMessageRepository @Inject constructor(
         }
     }
 
+    override suspend fun clearConversation(conversationId: String): Result<Int> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                require(conversationId.isNotBlank()) { "Conversation is unavailable" }
+                val messages = dao.listMessagesForConversation(conversationId)
+                val deleted = dao.deleteConversation(conversationId)
+                messages.mapNotNull { it.attachmentStoragePath }
+                    .distinct()
+                    .forEach(attachmentStore::delete)
+                deleted
+            }
+        }
+
     private suspend fun sendContent(
         conversationId: String,
         recipientId: String,

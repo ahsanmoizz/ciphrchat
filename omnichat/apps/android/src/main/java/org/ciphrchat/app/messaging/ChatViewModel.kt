@@ -57,6 +57,20 @@ class ChatViewModel @Inject constructor(
 
     fun clearNotice() { _notice.value = null }
 
+    fun clearChat(onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            repository.clearConversation(conversationId)
+                .onSuccess {
+                    _notice.value = null
+                    onComplete(true)
+                }
+                .onFailure {
+                    _notice.value = it.message ?: "Chat could not be cleared"
+                    onComplete(false)
+                }
+        }
+    }
+
     fun materializeAttachment(message: ChatMessage, onReady: (Result<File>) -> Unit) {
         val path = message.attachmentStoragePath
         val name = message.attachmentFileName

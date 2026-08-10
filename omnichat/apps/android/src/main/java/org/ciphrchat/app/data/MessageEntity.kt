@@ -39,6 +39,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAtEpochMs ASC")
     fun getMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId")
+    suspend fun listMessagesForConversation(conversationId: String): List<MessageEntity>
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteConversation(conversationId: String): Int
+
     @Query("SELECT * FROM messages ORDER BY createdAtEpochMs DESC")
     fun getAllMessages(): Flow<List<MessageEntity>>
 
