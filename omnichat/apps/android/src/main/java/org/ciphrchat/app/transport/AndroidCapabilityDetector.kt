@@ -27,6 +27,7 @@ data class AndroidDeviceFeatures(
     val hasBluetoothLe: Boolean,
     val bluetoothEnabled: Boolean?,
     val hasNfc: Boolean,
+    val hasNfcHostCardEmulation: Boolean,
     val nfcEnabled: Boolean,
     val hasUwb: Boolean,
     val hasConsumerIrEmitter: Boolean,
@@ -176,6 +177,7 @@ object CapabilityPolicy {
 
         assessments[TransportKind.NFC_PAIRING] = when {
             !features.hasNfc -> CapabilityAssessment(TransportKind.NFC_PAIRING, TransportAvailability.UNAVAILABLE, "NFC hardware not detected")
+            !features.hasNfcHostCardEmulation -> CapabilityAssessment(TransportKind.NFC_PAIRING, TransportAvailability.UNAVAILABLE, "NFC messaging requires host card emulation, which this phone does not report")
             !features.nfcEnabled -> CapabilityAssessment(TransportKind.NFC_PAIRING, TransportAvailability.UNAVAILABLE, "NFC is turned off")
             else -> CapabilityAssessment(TransportKind.NFC_PAIRING, TransportAvailability.STARTING, "NFC detected; ready for a tap session")
         }
@@ -183,11 +185,11 @@ object CapabilityPolicy {
         assessments[TransportKind.INFRARED] = when {
             !features.hasConsumerIrEmitter -> CapabilityAssessment(TransportKind.INFRARED, TransportAvailability.UNAVAILABLE, "IR emitter hardware not detected")
             !features.hasCamera -> CapabilityAssessment(TransportKind.INFRARED, TransportAvailability.UNAVAILABLE, "Camera hardware not detected for optical receiving")
-            else -> permissionOrReady(
+            else -> CapabilityAssessment(
                 TransportKind.INFRARED,
-                listOf(Manifest.permission.CAMERA),
-                "IR emitter and camera detected"
-            ) { CapabilityAssessment(TransportKind.INFRARED, TransportAvailability.STARTING, "IR emitter and camera detected; ready to start") }
+                TransportAvailability.UNAVAILABLE,
+                "IR remote-control hardware detected, but Android provides no verified bidirectional IR message link"
+            )
         }
 
         assessments[TransportKind.UWB_ASSIST] = when {
@@ -285,6 +287,7 @@ class AndroidCapabilityDetector @Inject constructor(
             hasBluetoothLe = pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE),
             bluetoothEnabled = bluetoothEnabled,
             hasNfc = pm.hasSystemFeature(PackageManager.FEATURE_NFC),
+            hasNfcHostCardEmulation = pm.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION),
             nfcEnabled = runCatching { nfcAdapter?.isEnabled == true }.getOrDefault(false),
             hasUwb = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && pm.hasSystemFeature(PackageManager.FEATURE_UWB),
             hasConsumerIrEmitter = runCatching { irManager?.hasIrEmitter() == true }.getOrDefault(false),

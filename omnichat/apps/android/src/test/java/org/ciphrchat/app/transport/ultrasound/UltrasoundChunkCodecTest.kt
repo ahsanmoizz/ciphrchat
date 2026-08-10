@@ -2,6 +2,7 @@ package org.ciphrchat.app.transport.ultrasound
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class UltrasoundChunkCodecTest {
@@ -18,5 +19,14 @@ class UltrasoundChunkCodecTest {
         assertEquals(2, decoded.index)
         assertEquals(7, decoded.total)
         assertArrayEquals(data, decoded.data)
+    }
+
+    @Test
+    fun receiverAcknowledgementRoundTripsAndRejectsCorruption() {
+        val id = ByteArray(UltrasoundChunkCodec.TRANSFER_ID_BYTES) { (it * 7).toByte() }
+        val encoded = UltrasoundChunkCodec.encodeAcknowledgement(id)
+
+        assertArrayEquals(id, UltrasoundChunkCodec.decodeAcknowledgement(encoded))
+        assertNull(UltrasoundChunkCodec.decodeAcknowledgement(encoded.copyOf().also { it[0] = 0 }))
     }
 }

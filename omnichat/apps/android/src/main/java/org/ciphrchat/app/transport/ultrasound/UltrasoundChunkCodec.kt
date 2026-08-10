@@ -5,6 +5,7 @@ import java.nio.ByteBuffer
 /** Fragments a transport envelope across the modem's 237-byte outer frame. */
 object UltrasoundChunkCodec {
     private val magic = byteArrayOf(0x43, 0x48, 0x55, 0x32)
+    private val ackMagic = byteArrayOf(0x43, 0x48, 0x55, 0x41)
     const val TRANSFER_ID_BYTES = 16
     private const val HEADER_BYTES = 4 + TRANSFER_ID_BYTES + 2 + 2
     const val MAX_CHUNK_BYTES = UltrasoundFrameCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES
@@ -37,5 +38,16 @@ object UltrasoundChunkCodec {
         val data = ByteArray(buffer.remaining())
         buffer.get(data)
         return Chunk(id, index, total, data)
+    }
+
+    fun encodeAcknowledgement(transferId: ByteArray): ByteArray {
+        require(transferId.size == TRANSFER_ID_BYTES)
+        return ackMagic + transferId
+    }
+
+    fun decodeAcknowledgement(bytes: ByteArray): ByteArray? {
+        if (bytes.size != ackMagic.size + TRANSFER_ID_BYTES) return null
+        if (!bytes.copyOfRange(0, ackMagic.size).contentEquals(ackMagic)) return null
+        return bytes.copyOfRange(ackMagic.size, bytes.size)
     }
 }

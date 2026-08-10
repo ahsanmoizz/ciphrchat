@@ -75,8 +75,12 @@ class InfraredTransportAdapter @Inject constructor(
                 }
             }
         }
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "IR optical send/receive ready; align camera and emitter")
-        return Result.success(Unit)
+        _state.value = TransportState(
+            kind,
+            TransportAvailability.UNAVAILABLE,
+            "IR emitter detected, but Android remote-control IR is not a verified bidirectional message link"
+        )
+        return Result.failure(IllegalStateException(_state.value.detail))
     }
 
     override suspend fun stop(): Result<Unit> {

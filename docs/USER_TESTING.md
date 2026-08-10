@@ -73,10 +73,10 @@ once:
 | Wi-Fi Aware | Phones nearby; Wi-Fi enabled | Both phones must support Wi-Fi Aware |
 | Bluetooth direct | Bluetooth enabled on both | Nearby Bluetooth permissions granted |
 | Bluetooth mesh | Add a third paired phone between the endpoints | Small offline messages; hop limits apply |
-| Nearby audio | Phones face each other in a quiet room | Microphone permission; slow and short-message oriented |
-| NFC | Touch the NFC areas together | NFC enabled; explicit tap session |
-| UWB | Phones close together | UWB verifies proximity; BLE carries the message |
-| Infrared | Aim the IR emitter at the other phone's camera | Both phones need the required hardware, camera permission, and line of sight |
+| Nearby audio | Phones face each other in a quiet room | Microphone permission; green only after the receiver returns an acoustic acknowledgement |
+| NFC | Keep both apps open and phones unlocked, then touch the NFC areas together | Both phones need NFC host-card emulation; the sender becomes the reader only for the tap |
+| UWB | Phones close together | UWB verifies distance; BLE carries the encrypted message because Android exposes ranging, not a UWB data socket |
+| Infrared | Not an automatic message route | Android consumer IR is remote-control transmit hardware, not a verified bidirectional phone-to-phone bearer |
 
 Automatic routing chooses a usable route. It does not falsely mark an
 unsupported radio as available. For a focused route test, temporarily disable

@@ -43,6 +43,7 @@ class UwbTransportAdapter @Inject constructor(
         TransportCapability.DISCOVERY,
         TransportCapability.PAIRING,
         TransportCapability.RANGING,
+        TransportCapability.SMALL_TEXT,
         TransportCapability.OFFLINE
     )
 
@@ -71,7 +72,7 @@ class UwbTransportAdapter @Inject constructor(
     )
 
     override suspend fun start(): Result<Unit> {
-        if (started && _state.value.availability == TransportAvailability.AVAILABLE) return Result.success(Unit)
+        if (started) return Result.success(Unit)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, "UWB requires Android 12 or newer")
             return Result.failure(IllegalStateException("UWB API is unavailable"))
@@ -93,7 +94,7 @@ class UwbTransportAdapter @Inject constructor(
             controlJob = scope.launch {
                 gattServer.incomingControl.collect { incoming -> handleControl(incoming.deviceAddress, incoming.payload) }
             }
-            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "UWB ranging ready; BLE is used for secure parameter exchange and messages")
+            _state.value = TransportState(kind, TransportAvailability.STARTING, "UWB hardware ready; waiting to verify a nearby CiphrChat peer, with BLE carrying message bytes")
         }.onFailure {
             started = false
             _state.value = TransportState(kind, TransportAvailability.UNAVAILABLE, it.message ?: "UWB service unavailable")
@@ -218,7 +219,7 @@ class UwbTransportAdapter @Inject constructor(
                                 verifiedPeers.remove(session.mac)
                                 _state.value = TransportState(
                                     kind,
-                                    TransportAvailability.AVAILABLE,
+                                    TransportAvailability.STARTING,
                                     "UWB measured $formatted m • move within 2.5 m to verify proximity"
                                 )
                             }

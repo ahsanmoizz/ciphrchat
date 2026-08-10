@@ -84,6 +84,22 @@ class CapabilityPolicyTest {
     }
 
     @Test
+    fun nfcMessagingRequiresHostCardEmulation() {
+        val unsupported = CapabilityPolicy.evaluate(
+            features(sdkInt = 33, hasNfc = true, hasNfcHostCardEmulation = false, nfcEnabled = true),
+            emptySet()
+        ).assessment(TransportKind.NFC_PAIRING)
+        assertFalse(unsupported.canStart)
+        assertTrue(unsupported.detail.contains("host card emulation"))
+
+        val supported = CapabilityPolicy.evaluate(
+            features(sdkInt = 33, hasNfc = true, hasNfcHostCardEmulation = true, nfcEnabled = true),
+            emptySet()
+        ).assessment(TransportKind.NFC_PAIRING)
+        assertTrue(supported.canStart)
+    }
+
+    @Test
     fun absentOptionalHardwareDoesNotRequestItsPermissions() {
         val snapshot = CapabilityPolicy.evaluate(features(sdkInt = 33), emptySet())
 
@@ -103,6 +119,7 @@ class CapabilityPolicyTest {
         hasBluetoothLe: Boolean = false,
         bluetoothEnabled: Boolean? = false,
         hasNfc: Boolean = false,
+        hasNfcHostCardEmulation: Boolean = false,
         nfcEnabled: Boolean = false,
         hasUwb: Boolean = false,
         hasConsumerIrEmitter: Boolean = false,
@@ -119,6 +136,7 @@ class CapabilityPolicyTest {
         hasBluetoothLe,
         bluetoothEnabled,
         hasNfc,
+        hasNfcHostCardEmulation,
         nfcEnabled,
         hasUwb,
         hasConsumerIrEmitter,

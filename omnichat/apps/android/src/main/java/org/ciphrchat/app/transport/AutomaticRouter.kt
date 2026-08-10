@@ -6,13 +6,12 @@ import javax.inject.Singleton
 internal val DEFAULT_TRANSPORT_PRIORITY = listOf(
     TransportKind.INTERNET_DIRECT,
     TransportKind.WIFI_LAN,
+    TransportKind.UWB_ASSIST,
     TransportKind.BLUETOOTH_DIRECT,
     TransportKind.WIFI_AWARE,
     TransportKind.WIFI_DIRECT,
     TransportKind.BLUETOOTH_MESH,
-    TransportKind.UWB_ASSIST,
     TransportKind.ULTRASOUND,
-    TransportKind.INFRARED,
     TransportKind.NFC_PAIRING,
     TransportKind.INTERNET_RELAY
 )

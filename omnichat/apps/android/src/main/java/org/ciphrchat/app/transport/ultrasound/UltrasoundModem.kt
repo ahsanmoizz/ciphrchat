@@ -34,7 +34,7 @@ class UltrasoundModem @Inject constructor(
         private const val SAMPLE_RATE = 44_100
         private const val SPACE_FREQUENCY = 18_000.0
         private const val MARK_FREQUENCY = 19_000.0
-        private const val BAUD_RATE = 100.0
+        private const val BAUD_RATE = 400.0
         private const val AMPLITUDE = 0.22
         private const val MAX_CAPTURE_SECONDS = 30
         private const val SYNC_MATCH_BITS = 48

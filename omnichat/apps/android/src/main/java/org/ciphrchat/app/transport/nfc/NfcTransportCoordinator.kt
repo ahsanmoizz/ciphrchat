@@ -11,6 +11,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
 import org.ciphrchat.app.transport.TransportInboundBus
@@ -41,6 +44,9 @@ class NfcTransportCoordinator @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var nfcAdapter: NfcAdapter? = null
+    @Volatile private var foregroundActivity: Activity? = null
+    private val _verifiedPeer = MutableStateFlow(false)
+    val verifiedPeer: StateFlow<Boolean> = _verifiedPeer.asStateFlow()
     private data class PendingOutbound(val frame: ByteArray, val result: CompletableDeferred<SendResult>)
     private val outboundQueue = ArrayDeque<PendingOutbound>()
     private var hceFrame: ByteArray? = null
@@ -48,17 +54,17 @@ class NfcTransportCoordinator @Inject constructor(
     private var incomingExpected = -1
 
     fun attach(activity: Activity) {
+        foregroundActivity = activity
         nfcAdapter = activity.getSystemService(NfcAdapter::class.java)
-        nfcAdapter?.enableReaderMode(
-            activity,
-            { tag -> onTagDiscovered(tag) },
-            NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
-            null
-        )
+        // Stay in card-emulation mode until this phone actually has an
+        // outbound transfer. If both phones permanently enter reader mode,
+        // neither can act as the HCE target and a tap can never connect.
+        runCatching { nfcAdapter?.disableReaderMode(activity) }
     }
 
     fun detach(activity: Activity) {
         nfcAdapter?.disableReaderMode(activity)
+        if (foregroundActivity === activity) foregroundActivity = null
         nfcAdapter = null
     }
 
@@ -78,11 +84,16 @@ class NfcTransportCoordinator @Inject constructor(
             outboundQueue.addLast(pending)
             if (hceFrame == null) hceFrame = frame
         }
-        return withTimeoutOrNull(TIMEOUT_MS) { result.await() }
-            ?: synchronized(this) {
-                outboundQueue.removeIf { it.result === result }
-                SendResult.Rejected("Bring the other CiphrChat phone close to complete NFC transfer")
-            }
+        if (!beginReaderSession()) {
+            synchronized(this) { removePending(pending) }
+            return SendResult.Rejected("Keep CiphrChat open on both unlocked phones, then try the NFC tap again")
+        }
+        val completed = withTimeoutOrNull(TIMEOUT_MS) { result.await() }
+        stopReaderSession()
+        return completed ?: synchronized(this) {
+            removePending(pending)
+            SendResult.Rejected("Bring the other CiphrChat phone close to complete NFC transfer")
+        }
     }
 
     fun hasPendingTransfer(): Boolean = synchronized(this) { outboundQueue.isNotEmpty() || hceFrame != null }
@@ -121,8 +132,9 @@ class NfcTransportCoordinator @Inject constructor(
                     if (outbound != null) {
                         writeRemote(isoDep, outbound.frame)
                         synchronized(this@NfcTransportCoordinator) {
-                            outboundQueue.removeFirstOccurrence(outbound)
+                            removePending(outbound)
                         }
+                        _verifiedPeer.value = true
                         outbound.result.complete(SendResult.Accepted(TransportKind.NFC_PAIRING, "nfc-tap-session"))
                         lastActivity = System.currentTimeMillis()
                     }
@@ -136,11 +148,42 @@ class NfcTransportCoordinator @Inject constructor(
                 result
             }.onFailure { error ->
                 synchronized(this@NfcTransportCoordinator) {
-                    outboundQueue.firstOrNull()?.result?.complete(SendResult.Failed(error))
+                    outboundQueue.firstOrNull()?.let { pending ->
+                        removePending(pending)
+                        pending.result.complete(SendResult.Failed(error))
+                    }
                 }
             }
             runCatching { isoDep.close() }
+            stopReaderSession()
         }
+    }
+
+    private fun beginReaderSession(): Boolean {
+        val activity = foregroundActivity ?: return false
+        val adapter = nfcAdapter ?: return false
+        activity.runOnUiThread {
+            adapter.enableReaderMode(
+                activity,
+                { tag -> onTagDiscovered(tag) },
+                NfcAdapter.FLAG_READER_NFC_A or
+                    NfcAdapter.FLAG_READER_NFC_B or
+                    NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK,
+                null
+            )
+        }
+        return true
+    }
+
+    private fun stopReaderSession() {
+        val activity = foregroundActivity ?: return
+        val adapter = nfcAdapter ?: return
+        activity.runOnUiThread { runCatching { adapter.disableReaderMode(activity) } }
+    }
+
+    private fun removePending(pending: PendingOutbound) {
+        outboundQueue.removeFirstOccurrence(pending)
+        if (hceFrame === pending.frame) hceFrame = outboundQueue.firstOrNull()?.frame
     }
 
     private fun writeRemote(isoDep: IsoDep, frame: ByteArray) {
@@ -179,7 +222,7 @@ class NfcTransportCoordinator @Inject constructor(
                 if (body.size < 4) break
                 expected = ((body[0].toInt() and 0xFF) shl 24) or ((body[1].toInt() and 0xFF) shl 16) or
                     ((body[2].toInt() and 0xFF) shl 8) or (body[3].toInt() and 0xFF)
-                result.write(body, 0, body.size - 4)
+                result.write(body, 4, body.size - 4)
                 remoteOffset = body.size - 4
                 firstResponse = false
             } else {
@@ -241,7 +284,9 @@ class NfcTransportCoordinator @Inject constructor(
     private fun publishIncoming(frame: ByteArray) {
         runCatching {
             val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(frame)))
-            inboundBus.publish(TransportKind.NFC_PAIRING, envelope)
+            if (inboundBus.publish(TransportKind.NFC_PAIRING, envelope)) {
+                _verifiedPeer.value = true
+            }
         }
     }
 

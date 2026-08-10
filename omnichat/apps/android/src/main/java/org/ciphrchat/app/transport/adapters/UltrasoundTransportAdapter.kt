@@ -3,12 +3,15 @@ package org.ciphrchat.app.transport.adapters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import java.util.UUID
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -41,6 +44,7 @@ class UltrasoundTransportAdapter @Inject constructor(
     private var inboundJob: Job? = null
     private data class Assembly(val total: Int, val parts: Array<ByteArray?>, var received: Int = 0)
     private val assemblies = mutableMapOf<String, Assembly>()
+    private val pendingAcknowledgements = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
 
     override suspend fun start(): Result<Unit> {
         if (!modem.startListening()) {
@@ -51,8 +55,16 @@ class UltrasoundTransportAdapter @Inject constructor(
             inboundJob = scope.launch {
                 modem.incomingData.collect { bytes ->
                     runCatching {
+                        UltrasoundChunkCodec.decodeAcknowledgement(bytes)?.let { transferId ->
+                            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio peer acknowledged a transfer")
+                            pendingAcknowledgements.remove(transferId.key())?.complete(Unit)
+                            return@runCatching
+                        }
                         val chunk = UltrasoundChunkCodec.decode(bytes) ?: return@runCatching
-                        val key = chunk.transferId.joinToString("") { byte -> "%02x".format(byte) }
+                        val key = chunk.transferId.key()
+                        // Ignore our own speaker echo. Without this guard the
+                        // sender could acknowledge itself and falsely report delivery.
+                        if (pendingAcknowledgements.containsKey(key)) return@runCatching
                         val assembled = synchronized(assemblies) {
                             val current = assemblies.getOrPut(key) {
                                 Assembly(chunk.total, arrayOfNulls(chunk.total))
@@ -71,12 +83,17 @@ class UltrasoundTransportAdapter @Inject constructor(
                             } else null
                         } ?: return@runCatching
                         val envelope = TransportWireCodec.read(DataInputStream(ByteArrayInputStream(assembled)))
-                        inboundBus.publish(kind, envelope)
+                        if (inboundBus.publish(kind, envelope)) {
+                            _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio message received and acknowledged")
+                            modem.transmit(UltrasoundChunkCodec.encodeAcknowledgement(chunk.transferId))
+                        }
                     }
                 }
             }
         }
-        _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Secure nearby audio messaging ready")
+        if (_state.value.availability != TransportAvailability.AVAILABLE) {
+            _state.value = TransportState(kind, TransportAvailability.STARTING, "Nearby audio listening; waiting to verify another CiphrChat phone")
+        }
         return Result.success(Unit)
     }
 
@@ -109,18 +126,36 @@ class UltrasoundTransportAdapter @Inject constructor(
             .putLong(UUID.randomUUID().mostSignificantBits)
             .putLong(UUID.randomUUID().leastSignificantBits)
             .array()
+        val transferKey = transferId.key()
+        val acknowledgement = CompletableDeferred<Unit>()
+        pendingAcknowledgements[transferKey] = acknowledgement
         val total = maxOf(1, (bytes.size + UltrasoundChunkCodec.MAX_CHUNK_BYTES - 1) / UltrasoundChunkCodec.MAX_CHUNK_BYTES)
-        if (total > 0xFFFF) return SendResult.Rejected("Nearby audio envelope is too large")
-        for (index in 0 until total) {
-            val start = index * UltrasoundChunkCodec.MAX_CHUNK_BYTES
-            val end = minOf(bytes.size, start + UltrasoundChunkCodec.MAX_CHUNK_BYTES)
-            val frame = UltrasoundChunkCodec.encode(
-                UltrasoundChunkCodec.Chunk(transferId, index, total, bytes.copyOfRange(start, end))
-            )
-            if (!modem.transmit(frame)) {
-                return SendResult.Failed(IllegalStateException("Nearby audio transmission failed at chunk ${index + 1}/$total"))
-            }
+        if (total > 0xFFFF) {
+            pendingAcknowledgements.remove(transferKey)
+            return SendResult.Rejected("Nearby audio envelope is too large")
         }
-        return SendResult.Accepted(kind, "acoustic-broadcast-$total-frames")
+        return try {
+            for (index in 0 until total) {
+                val start = index * UltrasoundChunkCodec.MAX_CHUNK_BYTES
+                val end = minOf(bytes.size, start + UltrasoundChunkCodec.MAX_CHUNK_BYTES)
+                val frame = UltrasoundChunkCodec.encode(
+                    UltrasoundChunkCodec.Chunk(transferId, index, total, bytes.copyOfRange(start, end))
+                )
+                if (!modem.transmit(frame)) {
+                    return SendResult.Failed(IllegalStateException("Nearby audio transmission failed at chunk ${index + 1}/$total"))
+                }
+            }
+            if (withTimeoutOrNull(12_000L) { acknowledgement.await() } == null) {
+                _state.value = TransportState(kind, TransportAvailability.ERROR, "Nearby audio sent no verified receiver acknowledgement")
+                SendResult.Rejected("Nearby audio was sent but no receiver acknowledgement was heard")
+            } else {
+                _state.value = TransportState(kind, TransportAvailability.AVAILABLE, "Nearby audio delivery acknowledged by the receiver")
+                SendResult.Accepted(kind, "acoustic-acknowledged-$total-frames")
+            }
+        } finally {
+            pendingAcknowledgements.remove(transferKey)
+        }
     }
+
+    private fun ByteArray.key(): String = joinToString("") { byte -> "%02x".format(byte) }
 }
