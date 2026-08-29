@@ -1,5 +1,7 @@
 package org.ciphrchat.app.transport
 
+import org.ciphrchat.app.privacy.IpPrivacyPolicy
+import org.ciphrchat.app.privacy.PrivacyManager
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,14 +21,18 @@ internal val DEFAULT_TRANSPORT_PRIORITY = listOf(
 @Singleton
 class AutomaticRouter @Inject constructor(
     private val registry: TransportRegistry,
-    private val capabilityDetector: AndroidCapabilityDetector
+    private val capabilityDetector: AndroidCapabilityDetector,
+    private val privacyManager: PrivacyManager? = null
 ) {
     // Ordinary Internet is the default. Nearby radios are resilient fallbacks
     // when the recipient or encrypted mailbox cannot be reached through the relay.
     private val priority = DEFAULT_TRANSPORT_PRIORITY
 
     suspend fun route(envelope: OutboundEnvelope): SendResult {
-        val adapters = priority.mapNotNull(registry::byKind)
+        val isIpPrivacyEnabled = privacyManager?.isIpPrivacyEnabled?.value ?: true
+        val adapters = priority
+            .filter { IpPrivacyPolicy.isTransportAllowed(it, isIpPrivacyEnabled) }
+            .mapNotNull(registry::byKind)
         val failures = mutableListOf<String>()
         val snapshot = capabilityDetector.refresh()
 

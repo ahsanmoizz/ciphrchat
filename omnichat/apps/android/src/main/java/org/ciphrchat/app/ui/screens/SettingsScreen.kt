@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ciphrchat.app.BuildConfig
+import org.ciphrchat.app.privacy.PrivacyManager
 import org.ciphrchat.app.ui.components.CiphrSectionHeader
 import org.ciphrchat.app.ui.theme.*
 
@@ -22,6 +23,8 @@ fun SettingsScreen(
     onBackupIdentity: () -> Unit = {},
     onShowQr: () -> Unit = {},
     onRestoreIdentity: () -> Unit = {},
+    isIpPrivacyEnabled: Boolean = true,
+    onToggleIpPrivacy: (Boolean) -> Unit = {},
     backupMessage: String? = null
 ) {
     val scrollState = rememberScrollState()
@@ -47,19 +50,42 @@ fun SettingsScreen(
         SettingsRow("Restore identity", onRestoreIdentity)
 
         Spacer(Modifier.height(16.dp))
+        CiphrSectionHeader("Privacy")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Hide my IP", style = MaterialTheme.typography.bodyLarge, color = CiphrText)
+                Text(
+                    PrivacyManager.TRUTHFUL_PRIVACY_EXPLANATION,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CiphrTextSecondary
+                )
+            }
+            Switch(
+                checked = isIpPrivacyEnabled,
+                onCheckedChange = onToggleIpPrivacy,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = CiphrPrimary,
+                    checkedTrackColor = CiphrPrimary.copy(alpha = 0.5f)
+                )
+            )
+        }
+        HorizontalDivider(color = CiphrBorder)
+        SettingsInfoRow("Local storage", "Messages and attachments are encrypted in CiphrChat's private app storage")
+        SettingsInfoRow("App lock", "Not available in this release")
+        SettingsInfoRow("Blocked contacts", "Not available in this release")
+        SettingsInfoRow("Delete local data", "Use Android app storage settings")
+
+        Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Connections")
         SettingsInfoRow("Automatic routing", "Always enabled")
         SettingsInfoRow("Internet", "Primary long-range route over mobile data or Internet-connected Wi-Fi")
         SettingsInfoRow("Wi-Fi LAN", "Works on the same local network even when upstream Internet is unavailable")
         SettingsInfoRow("Bluetooth mesh", "Counts and forwards only through nearby CiphrChat participants")
         SettingsInfoRow("Nearby methods", "Wi-Fi Aware, Wi-Fi Direct, Bluetooth, and acoustic delivery are device-dependent")
-
-        Spacer(Modifier.height(16.dp))
-        CiphrSectionHeader("Privacy")
-        SettingsInfoRow("App lock", "Not available in this release")
-        SettingsInfoRow("Local storage", "Messages and attachments are encrypted in CiphrChat's private app storage")
-        SettingsInfoRow("Blocked contacts", "Not available in this release")
-        SettingsInfoRow("Delete local data", "Use Android app storage settings")
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Distribution")

@@ -3,11 +3,13 @@ package org.ciphrchat.app.app
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,16 +21,19 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import org.ciphrchat.app.backup.RecoveryManager
+import org.ciphrchat.app.calling.AudioCallManager
+import org.ciphrchat.app.calling.CallState
 import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
-import org.ciphrchat.app.backup.RecoveryManager
+import org.ciphrchat.app.privacy.PrivacyManager
+import org.ciphrchat.app.transport.AndroidCapabilityDetector
 import org.ciphrchat.app.transport.TransportRegistry
 import org.ciphrchat.app.transport.TransportRuntimeManager
-import org.ciphrchat.app.transport.AndroidCapabilityDetector
 import org.ciphrchat.app.ui.components.BottomNavItem
 import org.ciphrchat.app.ui.components.CiphrBottomBar
 import org.ciphrchat.app.ui.screens.*
@@ -44,6 +49,8 @@ class OnboardingViewModel @Inject constructor(
     private val transportRuntime: TransportRuntimeManager,
     private val transportRegistry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector,
+    private val privacyManager: PrivacyManager,
+    private val audioCallManager: AudioCallManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
@@ -63,6 +70,12 @@ class OnboardingViewModel @Inject constructor(
 
     val transportStates = transportRegistry.states()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val isIpPrivacyEnabled = privacyManager.isIpPrivacyEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    val callState = audioCallManager.callState
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CallState.Idle)
 
     init {
         viewModelScope.launch {
@@ -119,83 +132,51 @@ class OnboardingViewModel @Inject constructor(
 
     fun exportBackup(uri: Uri, password: String) {
         viewModelScope.launch {
-            backupMessage = "Creating encrypted backup…"
+            backupMessage = "Exporting encrypted backup…"
             val result = context.contentResolver.openOutputStream(uri)?.let {
                 recoveryManager.exportRecoveryFile(it, password)
-            } ?: Result.failure(IllegalStateException("Could not create backup file"))
-            backupMessage = result.fold(
-                onSuccess = { "Encrypted identity backup saved" },
-                onFailure = { it.message ?: "Backup failed" }
-            )
-        }
-    }
-    fun isOnboarded() = appState.isOnboarded
-}
-
-@HiltViewModel
-class ConnectViewModel @Inject constructor(
-    private val invitationService: InvitationService,
-    private val transportRegistry: TransportRegistry,
-    private val capabilityDetector: AndroidCapabilityDetector,
-    private val transportRuntime: TransportRuntimeManager
-) : ViewModel() {
-    var status by mutableStateOf<String?>(null)
-        private set
-    var nearbyStatus by mutableStateOf<String?>(null)
-        private set
-    var connectionPermissions by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    val transportStates = transportRegistry.states()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    init {
-        refreshConnections()
-    }
-
-    fun refreshConnections() {
-        connectionPermissions = capabilityDetector.refresh().missingPermissions
-        transportRuntime.startAll()
-    }
-
-    fun importInvitation(raw: String) {
-        if (raw.isBlank()) return
-        viewModelScope.launch {
-            importInvitationResult(raw)
-        }
-    }
-
-    suspend fun importInvitationResult(raw: String): Result<String> {
-        if (raw.isBlank()) return Result.failure(IllegalArgumentException("The invitation is empty"))
-        return invitationService.importInvitation(raw)
-            .map { contact ->
-                status = "Paired with ${contact.displayName}"
-                contact.contactId
-            }
-            .onFailure { status = it.message ?: "Invitation could not be imported" }
-    }
-
-    fun findNearby() {
-        viewModelScope.launch {
-            nearbyStatus = "Searching nearby connections…"
-            val localAdapters = transportRegistry.all().filter {
-                it.capabilities.contains(org.ciphrchat.app.transport.TransportCapability.DISCOVERY)
-            }
-            val peers = mutableListOf<org.ciphrchat.app.transport.DiscoveredPeer>()
-            for (adapter in localAdapters) {
-                runCatching {
-                    adapter.start().getOrThrow()
-                    kotlinx.coroutines.delay(1_500)
-                    peers += adapter.discoverPeers().getOrDefault(emptyList())
-                }
-            }
-            nearbyStatus = if (peers.isEmpty()) {
-                "No paired nearby contacts found"
-            } else {
-                "Found ${peers.size} nearby connection${if (peers.size == 1) "" else "s"}"
+            } ?: Result.failure(IllegalStateException("Could not open backup destination"))
+            result.onSuccess {
+                backupMessage = "Identity backed up securely"
+            }.onFailure {
+                backupMessage = it.message ?: "Backup failed"
             }
         }
     }
+
+    fun toggleIpPrivacy(enabled: Boolean) {
+        privacyManager.setIpPrivacyEnabled(enabled)
+    }
+
+    fun startCall(contactId: String, contactName: String) {
+        val senderId = identity?.publicId ?: return
+        audioCallManager.startCall(contactId, contactName, senderId)
+    }
+
+    fun acceptCall() {
+        val senderId = identity?.publicId ?: return
+        audioCallManager.acceptCall(senderId)
+    }
+
+    fun declineCall() {
+        val senderId = identity?.publicId ?: return
+        audioCallManager.declineCall(senderId)
+    }
+
+    fun hangup() {
+        val senderId = identity?.publicId ?: return
+        audioCallManager.hangup(senderId)
+    }
+
+    fun toggleMute() {
+        audioCallManager.toggleMute()
+    }
+
+    fun toggleSpeaker() {
+        audioCallManager.toggleSpeaker()
+    }
+
+    fun isOnboarded(): Boolean = appState.isOnboarded.value
 }
 
 @Composable
@@ -224,6 +205,9 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         showBackupPassword = uri != null
     }
 
+    val callState by viewModel.callState.collectAsState()
+    val isIpPrivacyEnabled by viewModel.isIpPrivacyEnabled.collectAsState()
+
     LaunchedEffect(viewModel.restoreCompleted) {
         if (viewModel.restoreCompleted) {
             navController.navigate(AppRoute.Chats.route) {
@@ -245,119 +229,139 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
 
     val startDest = if (viewModel.isOnboarded()) AppRoute.Chats.route else AppRoute.Welcome.route
 
-    Scaffold(
-        containerColor = CiphrBackground,
-        bottomBar = {
-            if (showBottomBar) {
-                CiphrBottomBar(currentRoute = currentRoute) { item ->
-                    navController.navigate(item.route) {
-                        popUpTo(AppRoute.Chats.route) { saveState = true }
-                        launchSingleTop = true; restoreState = true
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = CiphrBackground,
+            bottomBar = {
+                if (showBottomBar) {
+                    CiphrBottomBar(currentRoute = currentRoute) { item ->
+                        navController.navigate(item.route) {
+                            popUpTo(AppRoute.Chats.route) { saveState = true }
+                            launchSingleTop = true; restoreState = true
+                        }
                     }
+                }
+            }
+        ) { padding ->
+            NavHost(navController, startDest, Modifier.padding(padding)) {
+                composable(AppRoute.Welcome.route) {
+                    WelcomeScreen(
+                        onCreateIdentity = { navController.navigate(AppRoute.CreateIdentity.route) },
+                        onRestore = {
+                            recoveryPicker.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
+                        },
+                        restoreMessage = viewModel.restoreMessage
+                    )
+                }
+                composable(AppRoute.CreateIdentity.route) {
+                    CreateIdentityScreen { name ->
+                        viewModel.createIdentity(name)
+                    }
+                }
+                composable(AppRoute.EnableConnections.route) {
+                    EnableConnectionsScreen(
+                        transportStates = viewModel.transportStates,
+                        missingPermissions = viewModel.connectionPermissions,
+                        onPermissionsChanged = viewModel::refreshConnections,
+                        onEnable = { navController.navigate(AppRoute.IdentityReady.route) }
+                    )
+                }
+                composable(AppRoute.IdentityReady.route) {
+                    val id = viewModel.identity
+                    IdentityReadyScreen(
+                        displayName = id?.displayName ?: "User",
+                        fingerprint = id?.fingerprint ?: "0000-0000-0000-0000",
+                        qrContent = viewModel.invitation,
+                        onStartMessaging = {
+                            viewModel.finishOnboarding()
+                            navController.navigate(AppRoute.Chats.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    )
+                }
+                composable(AppRoute.Chats.route) {
+                    ChatsScreen(
+                        onConversationClick = { id -> navController.navigate(AppRoute.Chat.create(id)) },
+                        onAddContact = { navController.navigate(AppRoute.Connect.route) }
+                    )
+                }
+                composable(
+                    AppRoute.Chat.route,
+                    arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
+                ) { entry ->
+                    val convId = entry.arguments?.getString("conversationId") ?: ""
+                    ChatScreen(
+                        contactName = convId,
+                        onBack = { navController.popBackStack() },
+                        onStartCall = { contactName -> viewModel.startCall(convId, contactName) }
+                    )
+                }
+                composable(AppRoute.Scanner.route) {
+                    val connectViewModel: ConnectViewModel = hiltViewModel()
+                    ScannerScreen(
+                        onScanResult = { raw ->
+                            connectViewModel.importInvitationResult(raw).fold(
+                                onSuccess = { contactId ->
+                                    navController.navigate(AppRoute.Chat.create(contactId)) {
+                                        popUpTo(AppRoute.Scanner.route) { inclusive = true }
+                                    }
+                                    Result.success(Unit)
+                                },
+                                onFailure = { Result.failure(it) }
+                            )
+                        },
+                        onCancel = { navController.popBackStack() }
+                    )
+                }
+                composable(AppRoute.Connect.route) {
+                    val connectViewModel: ConnectViewModel = hiltViewModel()
+                    ConnectScreen(
+                        onScanQr = { navController.navigate(AppRoute.Scanner.route) },
+                        onImportInvitation = connectViewModel::importInvitation,
+                        onShowMyQr = { navController.navigate(AppRoute.IdentityReady.route) },
+                        onFindNearby = connectViewModel::findNearby,
+                        statusMessage = connectViewModel.status,
+                        nearbyStatus = connectViewModel.nearbyStatus,
+                        transportStates = connectViewModel.transportStates,
+                        missingPermissions = connectViewModel.connectionPermissions,
+                        onPermissionsChanged = connectViewModel::refreshConnections
+                    )
+                }
+                composable(AppRoute.Settings.route) {
+                    SettingsScreen(
+                        onShareApp = {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, "Install CiphrChat: https://github.com/ahsanmoizz/ciphrchat/releases")
+                            }
+                            context.startActivity(Intent.createChooser(intent, "Share CiphrChat"))
+                        },
+                        onShowQr = { navController.navigate(AppRoute.IdentityReady.route) },
+                        onRestoreIdentity = {
+                            recoveryPicker.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
+                        },
+                        onBackupIdentity = {
+                            backupPicker.launch("ciphrchat-recovery.ciphr")
+                        },
+                        isIpPrivacyEnabled = isIpPrivacyEnabled,
+                        onToggleIpPrivacy = viewModel::toggleIpPrivacy,
+                        backupMessage = viewModel.backupMessage
+                    )
                 }
             }
         }
-    ) { padding ->
-        NavHost(navController, startDest, Modifier.padding(padding)) {
-            composable(AppRoute.Welcome.route) {
-                WelcomeScreen(
-                    onCreateIdentity = { navController.navigate(AppRoute.CreateIdentity.route) },
-                    onRestore = {
-                        recoveryPicker.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
-                    },
-                    restoreMessage = viewModel.restoreMessage
-                )
-            }
-            composable(AppRoute.CreateIdentity.route) {
-                CreateIdentityScreen { name ->
-                    viewModel.createIdentity(name)
-                }
-            }
-            composable(AppRoute.EnableConnections.route) {
-                EnableConnectionsScreen(
-                    transportStates = viewModel.transportStates,
-                    missingPermissions = viewModel.connectionPermissions,
-                    onPermissionsChanged = viewModel::refreshConnections,
-                    onEnable = { navController.navigate(AppRoute.IdentityReady.route) }
-                )
-            }
-            composable(AppRoute.IdentityReady.route) {
-                val id = viewModel.identity
-                IdentityReadyScreen(
-                    displayName = id?.displayName ?: "User",
-                    fingerprint = id?.fingerprint ?: "0000-0000-0000-0000",
-                    qrContent = viewModel.invitation,
-                    onStartMessaging = {
-                        viewModel.finishOnboarding()
-                        navController.navigate(AppRoute.Chats.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
-                    }
-                )
-            }
-            composable(AppRoute.Chats.route) {
-                ChatsScreen(
-                    onConversationClick = { id -> navController.navigate(AppRoute.Chat.create(id)) },
-                    onAddContact = { navController.navigate(AppRoute.Connect.route) }
-                )
-            }
-            composable(
-                AppRoute.Chat.route,
-                arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
-            ) { entry ->
-                val convId = entry.arguments?.getString("conversationId") ?: ""
-                ChatScreen(contactName = convId, onBack = { navController.popBackStack() })
-            }
-            composable(AppRoute.Scanner.route) {
-                val connectViewModel: ConnectViewModel = hiltViewModel()
-                ScannerScreen(
-                    onScanResult = { raw ->
-                        connectViewModel.importInvitationResult(raw).fold(
-                            onSuccess = { contactId ->
-                                navController.navigate(AppRoute.Chat.create(contactId)) {
-                                    popUpTo(AppRoute.Scanner.route) { inclusive = true }
-                                }
-                                Result.success(Unit)
-                            },
-                            onFailure = { Result.failure(it) }
-                        )
-                    },
-                    onCancel = { navController.popBackStack() }
-                )
-            }
-            composable(AppRoute.Connect.route) {
-                val connectViewModel: ConnectViewModel = hiltViewModel()
-                ConnectScreen(
-                    onScanQr = { navController.navigate(AppRoute.Scanner.route) },
-                    onImportInvitation = connectViewModel::importInvitation,
-                    onShowMyQr = { navController.navigate(AppRoute.IdentityReady.route) },
-                    onFindNearby = connectViewModel::findNearby,
-                    statusMessage = connectViewModel.status,
-                    nearbyStatus = connectViewModel.nearbyStatus,
-                    transportStates = connectViewModel.transportStates,
-                    missingPermissions = connectViewModel.connectionPermissions,
-                    onPermissionsChanged = connectViewModel::refreshConnections
-                )
-            }
-            composable(AppRoute.Settings.route) {
-                SettingsScreen(
-                    onShareApp = {
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, "Install CiphrChat: https://github.com/ahsanmoizz/ciphrchat/releases")
-                        }
-                        context.startActivity(Intent.createChooser(intent, "Share CiphrChat"))
-                    },
-                    onShowQr = { navController.navigate(AppRoute.IdentityReady.route) },
-                    onRestoreIdentity = {
-                        recoveryPicker.launch(arrayOf("application/octet-stream", "application/json", "*/*"))
-                    },
-                    onBackupIdentity = {
-                        backupPicker.launch("ciphrchat-recovery.ciphr")
-                    },
-                    backupMessage = viewModel.backupMessage
-                )
-            }
+
+        // Active Call Overlay Screen
+        if (callState != CallState.Idle) {
+            CallScreen(
+                callState = callState,
+                onAccept = viewModel::acceptCall,
+                onDecline = viewModel::declineCall,
+                onHangup = viewModel::hangup,
+                onToggleMute = viewModel::toggleMute,
+                onToggleSpeaker = viewModel::toggleSpeaker
+            )
         }
     }
 
@@ -369,30 +373,38 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
             },
             title = { androidx.compose.material3.Text("Restore identity") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
-                    value = recoveryPassword,
-                    onValueChange = { recoveryPassword = it },
-                    label = { androidx.compose.material3.Text("Recovery password") },
-                    singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
-                )
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Enter the password chosen when this recovery file was exported.")
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = recoveryPassword,
+                        onValueChange = { recoveryPassword = it },
+                        label = { androidx.compose.material3.Text("Recovery password") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
-                    enabled = recoveryPassword.length >= 12 && recoveryUri != null,
                     onClick = {
                         val uri = recoveryUri
-                        if (uri != null) viewModel.restore(uri, recoveryPassword)
+                        val pass = recoveryPassword
                         showRecoveryPassword = false
                         recoveryPassword = ""
-                    }
-                ) { androidx.compose.material3.Text("Restore") }
+                        if (uri != null) viewModel.restore(uri, pass)
+                    },
+                    enabled = recoveryPassword.length >= 12
+                ) {
+                    androidx.compose.material3.Text("Restore")
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     showRecoveryPassword = false
                     recoveryPassword = ""
-                }) { androidx.compose.material3.Text("Cancel") }
+                }) {
+                    androidx.compose.material3.Text("Cancel")
+                }
             }
         )
     }
@@ -403,33 +415,40 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 showBackupPassword = false
                 backupPassword = ""
             },
-            title = { androidx.compose.material3.Text("Back up identity") },
+            title = { androidx.compose.material3.Text("Protect your backup") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
-                    value = backupPassword,
-                    onValueChange = { backupPassword = it },
-                    label = { androidx.compose.material3.Text("New recovery password") },
-                    supportingText = { androidx.compose.material3.Text("Use at least 12 characters and keep it safe.") },
-                    singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
-                )
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Choose a strong passphrase (at least 12 characters). It will encrypt your complete identity and conversation history.")
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = backupPassword,
+                        onValueChange = { backupPassword = it },
+                        label = { androidx.compose.material3.Text("Passphrase") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
-                    enabled = backupPassword.length >= 12 && backupUri != null,
                     onClick = {
                         val uri = backupUri
-                        if (uri != null) viewModel.exportBackup(uri, backupPassword)
+                        val pass = backupPassword
                         showBackupPassword = false
                         backupPassword = ""
-                    }
-                ) { androidx.compose.material3.Text("Back up") }
+                        if (uri != null) viewModel.exportBackup(uri, pass)
+                    },
+                    enabled = backupPassword.length >= 12
+                ) {
+                    androidx.compose.material3.Text("Save encrypted backup")
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     showBackupPassword = false
                     backupPassword = ""
-                }) { androidx.compose.material3.Text("Cancel") }
+                }) {
+                    androidx.compose.material3.Text("Cancel")
+                }
             }
         )
     }
