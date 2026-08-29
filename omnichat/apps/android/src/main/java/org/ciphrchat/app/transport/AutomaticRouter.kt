@@ -22,14 +22,14 @@ internal val DEFAULT_TRANSPORT_PRIORITY = listOf(
 class AutomaticRouter @Inject constructor(
     private val registry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector,
-    private val privacyManager: PrivacyManager? = null
+    private val privacyManager: PrivacyManager
 ) {
     // Ordinary Internet is the default. Nearby radios are resilient fallbacks
     // when the recipient or encrypted mailbox cannot be reached through the relay.
     private val priority = DEFAULT_TRANSPORT_PRIORITY
 
     suspend fun route(envelope: OutboundEnvelope): SendResult {
-        val isIpPrivacyEnabled = privacyManager?.isIpPrivacyEnabled?.value ?: true
+        val isIpPrivacyEnabled = privacyManager.isIpPrivacyEnabled.value
         val adapters = priority
             .filter { IpPrivacyPolicy.isTransportAllowed(it, isIpPrivacyEnabled) }
             .mapNotNull(registry::byKind)
