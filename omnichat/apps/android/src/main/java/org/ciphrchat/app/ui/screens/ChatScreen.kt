@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
@@ -36,6 +37,7 @@ import android.content.Intent
 fun ChatScreen(
     contactName: String,
     onBack: () -> Unit,
+    onStartCall: (String, String) -> Unit = { _, _ -> },
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val messages by viewModel.messages.collectAsState()
@@ -83,6 +85,11 @@ fun ChatScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = {
+                            onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
+                        }) {
+                            Icon(Icons.Default.Call, "Audio Call", tint = CiphrText)
+                        }
                         IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) searchQuery = "" }) {
                             Icon(if (searchVisible) Icons.Default.Close else Icons.Default.Search, if (searchVisible) "Close search" else "Search messages", tint = CiphrText)
                         }
@@ -112,65 +119,100 @@ fun ChatScreen(
             }
         },
         bottomBar = {
-            Row(
-                modifier = Modifier.fillMaxWidth().background(CiphrSurface)
-                    .padding(horizontal = 12.dp, vertical = 8.dp).navigationBarsPadding(),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CiphrSurface)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(8.dp)
             ) {
-                IconButton(onClick = { attachmentPicker.launch(arrayOf("*/*")) }) {
-                    Icon(Icons.Default.AttachFile, "Attach file", tint = CiphrTextSecondary)
+                notice?.let { message ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                            IconButton(onClick = viewModel::clearNotice, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, "Dismiss notice", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
                 }
-                OutlinedTextField(
-                    value = inputText, onValueChange = { inputText = it },
-                    placeholder = { Text("Message") }, shape = CiphrPillShape,
-                    modifier = Modifier.weight(1f), singleLine = false, maxLines = 4
-                )
-                Spacer(Modifier.width(8.dp))
-                IconButton(onClick = { viewModel.send(inputText); inputText = "" }, enabled = inputText.isNotBlank()) {
-                    Icon(Icons.AutoMirrored.Filled.Send, "Send",
-                        tint = if (inputText.isNotBlank()) CiphrPrimaryHover else CiphrTextSecondary)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = {
+                        attachmentPicker.launch(arrayOf("*/*"))
+                    }) {
+                        Icon(Icons.Default.AttachFile, "Attach file", tint = CiphrTextSecondary)
+                    }
+                    TextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Message…", color = CiphrTextSecondary) },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = CiphrBackground,
+                            unfocusedContainerColor = CiphrBackground,
+                            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                        ),
+                        shape = MaterialTheme.shapes.extraLarge
+                    )
+                    IconButton(
+                        onClick = {
+                            viewModel.send(inputText)
+                            inputText = ""
+                        },
+                        enabled = inputText.isNotBlank()
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            "Send",
+                            tint = if (inputText.isNotBlank()) CiphrPrimary else CiphrTextSecondary
+                        )
+                    }
                 }
             }
         }
-    ) { padding ->
+    ) { innerPadding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
-            state = listState, verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 12.dp)
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            notice?.let { message ->
-                item {
-                    Text(message, color = CiphrDanger, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            if (searchQuery.isNotBlank() && visibleMessages.isEmpty()) {
-                item {
-                    Text("No messages found", color = CiphrTextSecondary, modifier = Modifier.padding(vertical = 24.dp))
-                }
-            }
-            items(visibleMessages, key = { it.id }) { message ->
+            items(visibleMessages, key = { it.messageId }) { message ->
+                val timeFormat = remember { SimpleDateFormat("HH:mm", currentLocale) }
+                val timeStr = remember(message.timestampEpochMs) { timeFormat.format(Date(message.timestampEpochMs)) }
                 CiphrMessageBubble(
                     text = message.body,
-                    time = SimpleDateFormat("HH:mm", currentLocale).format(Date(message.createdAtEpochMs)),
                     isOutgoing = message.direction == MessageDirection.OUTGOING,
-                    statusLabel = if (message.direction == MessageDirection.OUTGOING) message.status.name.lowercase() else null,
-                    selectedTransport = message.selectedTransport,
-                    attachmentFileName = message.attachmentFileName,
-                    attachmentMimeType = message.attachmentMimeType,
-                    attachmentSizeBytes = message.attachmentSizeBytes,
-                    onOpenAttachment = if (message.attachmentStoragePath != null) {
-                        {
-                            viewModel.materializeAttachment(message) { result ->
-                                result.onSuccess { file ->
-                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-                                    context.startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(uri, message.attachmentMimeType ?: "application/octet-stream")
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    })
-                                }.onFailure { }
+                    timestamp = timeStr,
+                    isEncrypted = true,
+                    transportLabel = message.transportLabel,
+                    attachmentName = message.attachmentFileName,
+                    attachmentSize = message.attachmentSizeBytes,
+                    attachmentMime = message.attachmentMimeType,
+                    onOpenAttachment = {
+                        viewModel.materializeAttachment(message) { result ->
+                            result.onSuccess { file ->
+                                val authority = "${context.packageName}.fileprovider"
+                                val uri = FileProvider.getUriForFile(context, authority, file)
+                                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, message.attachmentMimeType ?: "*/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                runCatching { context.startActivity(viewIntent) }
                             }
                         }
-                    } else null
+                    }
                 )
             }
         }
@@ -179,17 +221,20 @@ fun ChatScreen(
     if (showClearConfirmation) {
         AlertDialog(
             onDismissRequest = { showClearConfirmation = false },
-            title = { Text("Clear this chat?") },
-            text = { Text("All messages and locally saved attachments in this conversation will be permanently removed from this device.") },
+            title = { Text("Clear Conversation?") },
+            text = { Text("All messages and downloaded files in this conversation will be permanently removed.") },
             confirmButton = {
                 TextButton(onClick = {
                     showClearConfirmation = false
-                    searchQuery = ""
                     viewModel.clearChat()
-                }) { Text("Clear chat", color = CiphrDanger) }
+                }) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showClearConfirmation = false }) { Text("Cancel") }
+                TextButton(onClick = { showClearConfirmation = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }

@@ -8,6 +8,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,8 @@ import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.backup.RecoveryManager
+import org.ciphrchat.app.calling.AudioCallManager
+import org.ciphrchat.app.calling.CallState
 import org.ciphrchat.app.privacy.PrivacyManager
 import org.ciphrchat.app.transport.TransportRegistry
 import org.ciphrchat.app.transport.TransportRuntimeManager
@@ -46,6 +49,7 @@ class OnboardingViewModel @Inject constructor(
     private val transportRegistry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector,
     private val privacyManager: PrivacyManager,
+    private val callManager: AudioCallManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
@@ -68,6 +72,9 @@ class OnboardingViewModel @Inject constructor(
 
     val isIpPrivacyEnabled = privacyManager.isIpPrivacyEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    val callState = callManager.callState
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CallState.Idle)
 
     init {
         viewModelScope.launch {
@@ -137,6 +144,34 @@ class OnboardingViewModel @Inject constructor(
 
     fun toggleIpPrivacy(enabled: Boolean) {
         privacyManager.setIpPrivacyEnabled(enabled)
+    }
+
+    fun startCall(contactId: String, contactName: String) {
+        val currentId = identity?.fingerprint ?: "self"
+        callManager.startCall(contactId, contactName, currentId)
+    }
+
+    fun acceptCall() {
+        val currentId = identity?.fingerprint ?: "self"
+        callManager.acceptCall(currentId)
+    }
+
+    fun declineCall() {
+        val currentId = identity?.fingerprint ?: "self"
+        callManager.declineCall(currentId)
+    }
+
+    fun hangupCall() {
+        val currentId = identity?.fingerprint ?: "self"
+        callManager.hangup(currentId)
+    }
+
+    fun toggleCallMute() {
+        callManager.toggleMute()
+    }
+
+    fun toggleCallSpeaker() {
+        callManager.toggleSpeaker()
     }
 
     fun isOnboarded() = appState.isOnboarded
@@ -235,6 +270,7 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
     }
 
     val isIpPrivacyEnabled by viewModel.isIpPrivacyEnabled.collectAsState()
+    val callState by viewModel.callState.collectAsState()
 
     LaunchedEffect(viewModel.restoreCompleted) {
         if (viewModel.restoreCompleted) {
@@ -318,7 +354,13 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
             ) { entry ->
                 val convId = entry.arguments?.getString("conversationId") ?: ""
-                ChatScreen(contactName = convId, onBack = { navController.popBackStack() })
+                ChatScreen(
+                    contactName = convId,
+                    onBack = { navController.popBackStack() },
+                    onStartCall = { contactId, contactName ->
+                        viewModel.startCall(contactId, contactName)
+                    }
+                )
             }
             composable(AppRoute.Scanner.route) {
                 val connectViewModel: ConnectViewModel = hiltViewModel()
@@ -373,6 +415,17 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 )
             }
         }
+    }
+
+    if (callState !is CallState.Idle) {
+        CallScreen(
+            callState = callState,
+            onAccept = viewModel::acceptCall,
+            onDecline = viewModel::declineCall,
+            onHangup = viewModel::hangupCall,
+            onToggleMute = viewModel::toggleCallMute,
+            onToggleSpeaker = viewModel::toggleCallSpeaker
+        )
     }
 
     if (showRecoveryPassword) {

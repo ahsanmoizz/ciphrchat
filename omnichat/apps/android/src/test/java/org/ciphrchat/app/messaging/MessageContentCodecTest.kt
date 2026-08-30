@@ -56,6 +56,15 @@ class MessageContentCodecTest {
     }
 
     @Test
+    fun callSignalRoundTrips() {
+        val signalJson = """{"type":"OFFER","callId":"call-123","sdp":"v=0\r\n","senderId":"alice","recipientId":"bob"}"""
+        val encoded = MessageContentCodec.encodeCallSignal(signalJson)
+        val decoded = MessageContentCodec.decode(encoded)
+
+        assertEquals(signalJson, decoded.callSignalJson)
+    }
+
+    @Test
     fun legacyPlainTextRemainsReadable() {
         assertEquals("legacy", MessageContentCodec.decode("legacy".toByteArray()).text)
     }
