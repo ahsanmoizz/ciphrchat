@@ -36,7 +36,6 @@ const MAILBOX_MAGIC: &[u8; 4] = b"CMB1";
 
 // 5 GiB maximum file size constraint
 const MAX_FILE_SIZE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
-const MAX_TOTAL_FILE_QUOTA_BYTES: u64 = 50 * 1024 * 1024 * 1024;
 const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,19 +230,25 @@ pub struct InitFileRequest {
     pub expires_at_epoch_ms: u64,
 }
 
-#[derive(Clone)]
-pub struct FileStore {
-    root: PathBuf,
-    max_total_quota: u64,
+#[derive(Debug)]
+struct TransitSession {
+    meta: FileMetadata,
+    buffered_chunks: HashMap<u32, Vec<u8>>,
+    delivered_chunks: Vec<u32>,
 }
 
-impl FileStore {
-    pub fn new(root: PathBuf, max_total_quota: u64) -> anyhow::Result<Self> {
-        fs::create_dir_all(&root)?;
-        Ok(Self {
-            root,
-            max_total_quota,
-        })
+#[derive(Clone)]
+pub struct StreamRelayStore {
+    sessions: Arc<Mutex<HashMap<String, TransitSession>>>,
+    max_buffered_chunks_per_session: usize,
+}
+
+impl StreamRelayStore {
+    pub fn new(max_buffered_chunks_per_session: usize) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            max_buffered_chunks_per_session,
+        }
     }
 
     pub fn init_file(&self, req: InitFileRequest) -> anyhow::Result<()> {
@@ -262,23 +267,17 @@ impl FileStore {
             "Total chunks mismatch for file size"
         );
         let now = now_epoch_ms();
-        anyhow::ensure!(req.expires_at_epoch_ms > now, "File is already expired");
+        anyhow::ensure!(
+            req.expires_at_epoch_ms > now,
+            "File transfer is already expired"
+        );
         anyhow::ensure!(
             req.expires_at_epoch_ms <= now.saturating_add(MAX_RETENTION_MS),
             "Retention exceeds 7 days"
         );
 
-        let total_used = self.total_disk_usage()?;
-        anyhow::ensure!(
-            total_used.saturating_add(req.file_size) <= self.max_total_quota,
-            "Server disk quota exceeded for large files"
-        );
-
-        let file_dir = self.file_directory(&req.file_id)?;
-        fs::create_dir_all(&file_dir)?;
-
         let meta = FileMetadata {
-            file_id: req.file_id,
+            file_id: req.file_id.clone(),
             sender_peer_id: req.sender_peer_id,
             recipient_peer_id: req.recipient_peer_id,
             file_size: req.file_size,
@@ -289,141 +288,112 @@ impl FileStore {
             completed: false,
         };
 
-        let meta_json = serde_json::to_vec_pretty(&meta)?;
-        let meta_path = file_dir.join("meta.json");
-        fs::write(meta_path, meta_json)?;
+        let mut lock = self.sessions.lock().unwrap();
+        lock.insert(
+            req.file_id,
+            TransitSession {
+                meta,
+                buffered_chunks: HashMap::new(),
+                delivered_chunks: Vec::new(),
+            },
+        );
         Ok(())
     }
 
     pub fn save_chunk(&self, file_id: &str, chunk_index: u32, data: &[u8]) -> anyhow::Result<()> {
         validate_file_id(file_id)?;
-        let file_dir = self.file_directory(file_id)?;
-        let meta_path = file_dir.join("meta.json");
-        anyhow::ensure!(meta_path.exists(), "File transfer has not been initialized");
+        let mut lock = self.sessions.lock().unwrap();
+        let session = lock
+            .get_mut(file_id)
+            .ok_or_else(|| anyhow::anyhow!("File transfer not found or expired"))?;
 
-        let meta: FileMetadata = serde_json::from_slice(&fs::read(&meta_path)?)?;
-        anyhow::ensure!(chunk_index < meta.total_chunks, "Chunk index out of bounds");
         anyhow::ensure!(
-            data.len() <= meta.chunk_size as usize,
+            chunk_index < session.meta.total_chunks,
+            "Chunk index out of bounds"
+        );
+        anyhow::ensure!(
+            data.len() <= session.meta.chunk_size as usize,
             "Chunk data exceeds negotiated chunk size"
         );
 
-        let chunk_file = file_dir.join(format!("chunk_{chunk_index}.part"));
-        let temp_file = file_dir.join(format!(
-            ".tmp_chunk_{chunk_index}_{}",
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-        ));
-        fs::write(&temp_file, data)?;
-        fs::rename(temp_file, chunk_file)?;
+        // Bounded in-memory backpressure buffer
+        anyhow::ensure!(
+            session.buffered_chunks.len() < self.max_buffered_chunks_per_session
+                || session.buffered_chunks.contains_key(&chunk_index),
+            "Streaming transit buffer full (waiting for receiver to consume chunks)"
+        );
+
+        session.buffered_chunks.insert(chunk_index, data.to_vec());
         Ok(())
     }
 
     pub fn get_chunk(&self, file_id: &str, chunk_index: u32) -> anyhow::Result<Vec<u8>> {
         validate_file_id(file_id)?;
-        let file_dir = self.file_directory(file_id)?;
-        let chunk_file = file_dir.join(format!("chunk_{chunk_index}.part"));
-        anyhow::ensure!(chunk_file.exists(), "Chunk not found");
-        Ok(fs::read(chunk_file)?)
+        let mut lock = self.sessions.lock().unwrap();
+        let session = lock
+            .get_mut(file_id)
+            .ok_or_else(|| anyhow::anyhow!("File transfer not found or expired"))?;
+
+        // Zero-retention: chunk is removed from memory immediately upon delivery to receiver
+        let chunk = session
+            .buffered_chunks
+            .remove(&chunk_index)
+            .ok_or_else(|| anyhow::anyhow!("Chunk not ready in streaming transit buffer"))?;
+
+        if !session.delivered_chunks.contains(&chunk_index) {
+            session.delivered_chunks.push(chunk_index);
+        }
+        Ok(chunk)
     }
 
     pub fn get_status(&self, file_id: &str) -> anyhow::Result<FileStatusResponse> {
         validate_file_id(file_id)?;
-        let file_dir = self.file_directory(file_id)?;
-        let meta_path = file_dir.join("meta.json");
-        anyhow::ensure!(meta_path.exists(), "File transfer not found");
+        let lock = self.sessions.lock().unwrap();
+        let session = lock
+            .get(file_id)
+            .ok_or_else(|| anyhow::anyhow!("File transfer not found or expired"))?;
 
-        let meta: FileMetadata = serde_json::from_slice(&fs::read(&meta_path)?)?;
-        let mut uploaded = Vec::new();
-        for i in 0..meta.total_chunks {
-            if file_dir.join(format!("chunk_{i}.part")).exists() {
-                uploaded.push(i);
+        let mut available = session.delivered_chunks.clone();
+        for &k in session.buffered_chunks.keys() {
+            if !available.contains(&k) {
+                available.push(k);
             }
         }
+        available.sort_unstable();
 
         Ok(FileStatusResponse {
-            file_id: meta.file_id,
-            file_size: meta.file_size,
-            chunk_size: meta.chunk_size,
-            total_chunks: meta.total_chunks,
-            uploaded_chunks: uploaded,
-            completed: meta.completed,
-            expires_at_epoch_ms: meta.expires_at_epoch_ms,
+            file_id: session.meta.file_id.clone(),
+            file_size: session.meta.file_size,
+            chunk_size: session.meta.chunk_size,
+            total_chunks: session.meta.total_chunks,
+            uploaded_chunks: available,
+            completed: session.meta.completed,
+            expires_at_epoch_ms: session.meta.expires_at_epoch_ms,
         })
     }
 
     pub fn complete_file(&self, file_id: &str) -> anyhow::Result<()> {
         validate_file_id(file_id)?;
-        let file_dir = self.file_directory(file_id)?;
-        let meta_path = file_dir.join("meta.json");
-        anyhow::ensure!(meta_path.exists(), "File not found");
-
-        let mut meta: FileMetadata = serde_json::from_slice(&fs::read(&meta_path)?)?;
-        for i in 0..meta.total_chunks {
-            anyhow::ensure!(
-                file_dir.join(format!("chunk_{i}.part")).exists(),
-                "Cannot complete: missing chunk {i}"
-            );
-        }
-        meta.completed = true;
-        fs::write(meta_path, serde_json::to_vec_pretty(&meta)?)?;
+        let mut lock = self.sessions.lock().unwrap();
+        let session = lock
+            .get_mut(file_id)
+            .ok_or_else(|| anyhow::anyhow!("File transfer not found"))?;
+        session.meta.completed = true;
+        session.buffered_chunks.clear();
         Ok(())
     }
 
     pub fn delete_file(&self, file_id: &str) -> anyhow::Result<()> {
         validate_file_id(file_id)?;
-        let file_dir = self.file_directory(file_id)?;
-        if file_dir.exists() {
-            fs::remove_dir_all(file_dir)?;
-        }
+        let mut lock = self.sessions.lock().unwrap();
+        lock.remove(file_id);
         Ok(())
     }
 
-    fn file_directory(&self, file_id: &str) -> anyhow::Result<PathBuf> {
-        validate_file_id(file_id)?;
-        Ok(self.root.join(file_id))
-    }
-
-    fn total_disk_usage(&self) -> anyhow::Result<u64> {
-        let mut total = 0u64;
-        if !self.root.exists() {
-            return Ok(0);
-        }
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            if entry.path().is_dir() {
-                for file_entry in fs::read_dir(entry.path())? {
-                    let file_entry = file_entry?;
-                    total = total.saturating_add(file_entry.metadata()?.len());
-                }
-            }
-        }
-        Ok(total)
-    }
-
-    pub fn cleanup_expired(&self) -> anyhow::Result<()> {
+    pub fn cleanup_expired(&self) {
         let now = now_epoch_ms();
-        if !self.root.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                let meta_path = path.join("meta.json");
-                if meta_path.exists() {
-                    if let Ok(meta) = fs::read(&meta_path)
-                        .and_then(|b| Ok(serde_json::from_slice::<FileMetadata>(&b)?))
-                    {
-                        if meta.expires_at_epoch_ms <= now {
-                            let _ = fs::remove_dir_all(path);
-                        }
-                    }
-                } else {
-                    let _ = fs::remove_dir_all(path);
-                }
-            }
-        }
-        Ok(())
+        let mut lock = self.sessions.lock().unwrap();
+        lock.retain(|_, s| s.meta.expires_at_epoch_ms > now);
     }
 }
 
@@ -597,7 +567,7 @@ impl RateLimiter {
 #[derive(Clone)]
 struct AppState {
     info: RelayInfo,
-    file_store: Arc<FileStore>,
+    stream_relay: Arc<StreamRelayStore>,
     rate_limiter: Arc<RateLimiter>,
 }
 
@@ -606,7 +576,7 @@ async fn init_file_handler(
     Json(req): Json<InitFileRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .init_file(req)
         .map(|_| StatusCode::CREATED)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
@@ -618,7 +588,7 @@ async fn upload_chunk_handler(
     body: Bytes,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .save_chunk(&file_id, chunk_index, &body)
         .map(|_| StatusCode::OK)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
@@ -629,7 +599,7 @@ async fn download_chunk_handler(
     AxumPath((file_id, chunk_index)): AxumPath<(String, u32)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .get_chunk(&file_id, chunk_index)
         .map(|data| {
             (
@@ -645,7 +615,7 @@ async fn file_status_handler(
     AxumPath(file_id): AxumPath<String>,
 ) -> Result<Json<FileStatusResponse>, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .get_status(&file_id)
         .map(Json)
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
@@ -656,7 +626,7 @@ async fn complete_file_handler(
     AxumPath(file_id): AxumPath<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .complete_file(&file_id)
         .map(|_| StatusCode::OK)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
@@ -667,7 +637,7 @@ async fn delete_file_handler(
     AxumPath(file_id): AxumPath<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
-        .file_store
+        .stream_relay
         .delete_file(&file_id)
         .map(|_| StatusCode::OK)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
@@ -982,12 +952,6 @@ fn mailbox_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/var/lib/ciphrchat/mailbox"))
 }
 
-fn files_path() -> PathBuf {
-    env::var_os("CIPHRCHAT_FILES_DIRECTORY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/var/lib/ciphrchat/files"))
-}
-
 fn handle_mailbox_request(
     store: &MailboxStore,
     peer: PeerId,
@@ -1047,7 +1011,7 @@ async fn run_http_server(
     peer_id: PeerId,
     tcp_port: String,
     quic_port: String,
-    file_store: Arc<FileStore>,
+    stream_relay: Arc<StreamRelayStore>,
 ) -> anyhow::Result<()> {
     let health_port = env::var("CIPHRCHAT_HEALTH_PORT").unwrap_or_else(|_| "8080".to_owned());
     let address: SocketAddr = format!("0.0.0.0:{health_port}").parse()?;
@@ -1059,7 +1023,7 @@ async fn run_http_server(
     let rate_limiter = Arc::new(RateLimiter::new(10));
     let app_state = AppState {
         info,
-        file_store,
+        stream_relay,
         rate_limiter,
     };
 
@@ -1106,7 +1070,8 @@ async fn main() -> anyhow::Result<()> {
     let local_key = load_or_create_relay_key(&key_path)?;
     let local_peer_id = PeerId::from(local_key.public());
     let mailbox = MailboxStore::new(mailbox_path())?;
-    let file_store = Arc::new(FileStore::new(files_path(), MAX_TOTAL_FILE_QUOTA_BYTES)?);
+    // Zero-retention stream relay with bounded in-memory buffer (max 4 chunks per active session)
+    let stream_relay = Arc::new(StreamRelayStore::new(4));
 
     let relay_config = relay::Config {
         max_reservations: 128,
@@ -1158,16 +1123,16 @@ async fn main() -> anyhow::Result<()> {
         local_peer_id,
         tcp_port,
         quic_port,
-        file_store.clone(),
+        stream_relay.clone(),
     ));
 
-    // Periodic cleanup of expired files every hour
-    let cleanup_store = file_store.clone();
+    // Periodic cleanup of expired streaming sessions every hour
+    let cleanup_relay = stream_relay.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(3600));
         loop {
             interval.tick().await;
-            let _ = cleanup_store.cleanup_expired();
+            cleanup_relay.cleanup_expired();
         }
     });
 
@@ -1217,18 +1182,6 @@ mod tests {
                 .as_nanos()
         ));
         (MailboxStore::new(path.clone()).unwrap(), path)
-    }
-
-    fn test_file_store(label: &str, quota: u64) -> (FileStore, PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "ciphrchat-files-{label}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        (FileStore::new(path.clone(), quota).unwrap(), path)
     }
 
     #[test]
@@ -1288,63 +1241,93 @@ mod tests {
     }
 
     #[test]
-    fn file_store_chunk_streaming_and_resume() {
-        let (store, path) = test_file_store("resume", 100 * 1024 * 1024);
+    fn test_stream_relay_zero_disk_storage_and_streaming() {
+        let store = StreamRelayStore::new(4);
         let file_id = "550e8400-e29b-41d4-a716-446655440000";
-        let chunk_size = 64 * 1024;
-        let file_size = 150 * 1024; // 3 chunks
-        let total_chunks = 3;
+        let chunk_size = 1024 * 1024; // 1 MiB
+        let file_size = 5u64 * 1024 * 1024 * 1024; // 5 GiB
+        let total_chunks = 5120;
 
+        // Initialize 5 GiB streaming session
         store
             .init_file(InitFileRequest {
                 file_id: file_id.to_owned(),
                 sender_peer_id: "sender1".to_owned(),
                 recipient_peer_id: "recipient1".to_owned(),
                 file_size,
-                chunk_size,
+                chunk_size: chunk_size as u32,
                 total_chunks,
                 sha256: "dummy-sha256".to_owned(),
                 expires_at_epoch_ms: now_epoch_ms() + 60_000,
             })
             .unwrap();
 
-        // Upload chunk 0 and 2 (simulate chunk 1 missing/interrupted)
-        let chunk0 = vec![1u8; chunk_size as usize];
-        let chunk2 = vec![3u8; (file_size - 2 * chunk_size as u64) as usize];
+        // Stream chunk 0
+        let chunk0 = vec![1u8; chunk_size];
         store.save_chunk(file_id, 0, &chunk0).unwrap();
-        store.save_chunk(file_id, 2, &chunk2).unwrap();
 
+        // Check status shows chunk 0 available in transit
         let status = store.get_status(file_id).unwrap();
-        assert_eq!(status.uploaded_chunks, vec![0, 2]);
-        assert!(!status.completed);
+        assert_eq!(status.uploaded_chunks, vec![0]);
+        assert_eq!(status.file_size, file_size);
 
-        // Completion fails when chunk 1 is missing
-        assert!(store.complete_file(file_id).is_err());
+        // Receiver takes chunk 0 (must be removed from memory immediately upon delivery)
+        let received0 = store.get_chunk(file_id, 0).unwrap();
+        assert_eq!(received0, chunk0);
 
-        // Resume: Upload missing chunk 1
-        let chunk1 = vec![2u8; chunk_size as usize];
+        // Second fetch must fail because chunk was already delivered and freed from memory (zero retention)
+        assert!(store.get_chunk(file_id, 0).is_err());
+
+        // Stream chunk 1
+        let chunk1 = vec![2u8; chunk_size];
         store.save_chunk(file_id, 1, &chunk1).unwrap();
+        let received1 = store.get_chunk(file_id, 1).unwrap();
+        assert_eq!(received1, chunk1);
 
-        let status2 = store.get_status(file_id).unwrap();
-        assert_eq!(status2.uploaded_chunks, vec![0, 1, 2]);
-
-        // Complete succeeds
-        assert!(store.complete_file(file_id).is_ok());
-
-        // Fetch chunk
-        let fetched0 = store.get_chunk(file_id, 0).unwrap();
-        assert_eq!(fetched0, chunk0);
-
-        // Delete
+        // Complete & delete session
+        store.complete_file(file_id).unwrap();
         store.delete_file(file_id).unwrap();
         assert!(store.get_status(file_id).is_err());
-
-        let _ = fs::remove_dir_all(path);
     }
 
     #[test]
-    fn file_store_rejects_oversized_and_path_traversal() {
-        let (store, path) = test_file_store("security", 100 * 1024 * 1024);
+    fn test_stream_relay_bounded_buffer_backpressure() {
+        let store = StreamRelayStore::new(2); // Max 2 buffered chunks
+        let file_id = "backpressure-test";
+        let chunk_size = 64 * 1024;
+        let file_size = 256 * 1024; // 4 chunks
+        let total_chunks = 4;
+
+        store
+            .init_file(InitFileRequest {
+                file_id: file_id.to_owned(),
+                sender_peer_id: "sender".to_owned(),
+                recipient_peer_id: "recipient".to_owned(),
+                file_size,
+                chunk_size,
+                total_chunks,
+                sha256: "sha".to_owned(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            })
+            .unwrap();
+
+        let chunk = vec![7u8; chunk_size as usize];
+        store.save_chunk(file_id, 0, &chunk).unwrap();
+        store.save_chunk(file_id, 1, &chunk).unwrap();
+
+        // 3rd chunk must fail due to backpressure (buffer limit reached)
+        assert!(store.save_chunk(file_id, 2, &chunk).is_err());
+
+        // Receiver consumes chunk 0
+        let _ = store.get_chunk(file_id, 0).unwrap();
+
+        // Now chunk 2 can be buffered successfully
+        assert!(store.save_chunk(file_id, 2, &chunk).is_ok());
+    }
+
+    #[test]
+    fn test_stream_relay_rejects_oversized_and_path_traversal() {
+        let store = StreamRelayStore::new(4);
 
         // Reject > 5 GiB
         let oversized = MAX_FILE_SIZE_BYTES + 1;
@@ -1361,7 +1344,7 @@ mod tests {
             })
             .is_err());
 
-        // Reject path traversal file ID
+        // Reject dangerous path traversal file IDs
         assert!(store
             .init_file(InitFileRequest {
                 file_id: "../../etc/passwd".to_owned(),
@@ -1374,30 +1357,6 @@ mod tests {
                 expires_at_epoch_ms: now_epoch_ms() + 60_000,
             })
             .is_err());
-
-        let _ = fs::remove_dir_all(path);
-    }
-
-    #[test]
-    fn file_store_enforces_disk_quota() {
-        let small_quota = 500 * 1024; // 500 KiB quota
-        let (store, path) = test_file_store("quota", small_quota);
-
-        // File exceeding total server quota
-        assert!(store
-            .init_file(InitFileRequest {
-                file_id: "large-file".to_owned(),
-                sender_peer_id: "sender".to_owned(),
-                recipient_peer_id: "recipient".to_owned(),
-                file_size: 600 * 1024,
-                chunk_size: 64 * 1024,
-                total_chunks: 10,
-                sha256: "sha".to_owned(),
-                expires_at_epoch_ms: now_epoch_ms() + 60_000,
-            })
-            .is_err());
-
-        let _ = fs::remove_dir_all(path);
     }
 
     #[test]

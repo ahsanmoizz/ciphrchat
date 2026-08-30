@@ -10,14 +10,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.InputStreamReader
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -28,8 +24,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Coordinates chunked streaming 5 GiB file uploads and downloads to the CiphrChat relay.
- * Streams data directly from storage to network with bounded RAM buffers, supporting resume and cancellation.
+ * Coordinates chunked streaming 5 GiB file uploads and downloads through the zero-retention CiphrChat relay.
+ * The relay acts as an in-memory transit pipe with zero disk storage; all chunk tracking, partial assembly,
+ * and resumption state is managed end-to-end on local device storage.
  */
 @Singleton
 class LargeFileTransferManager @Inject constructor(
@@ -79,66 +76,60 @@ class LargeFileTransferManager @Inject constructor(
     }
 
     /**
-     * Uploads file chunks in a streaming manner to the relay with resume support.
+     * Streams file chunks from local storage through the transit relay, reading missing chunks from the original local file.
      */
     suspend fun uploadFile(
         relayBaseHttpUrl: String,
         uri: Uri,
         descriptor: FileTransferDescriptor,
-        fileKey: ByteArray
+        fileKey: ByteArray,
+        missingChunkIndexes: Set<Int>? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val fileId = descriptor.fileId
             activeTransfers[fileId] = true
 
-            // 1. Init file on relay
+            // 1. Initialize transient stream session on relay
             initFileOnRelay(relayBaseHttpUrl, descriptor)
 
-            // 2. Query already uploaded chunks for resume
-            val uploadedSet = queryUploadedChunks(relayBaseHttpUrl, fileId)
-
-            val buffer = ByteArray(descriptor.chunkSize)
+            val chunksToSend = missingChunkIndexes ?: (0 until descriptor.totalChunks).toSet()
             var bytesReadTotal = 0L
 
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                for (chunkIndex in 0 until descriptor.totalChunks) {
-                    if (activeTransfers[fileId] != true) {
-                        throw CancellationException("Upload cancelled for $fileId")
-                    }
-
-                    val expectedBytes = if (chunkIndex == descriptor.totalChunks - 1) {
-                        (descriptor.fileSize - (chunkIndex.toLong() * descriptor.chunkSize)).toInt()
-                    } else {
-                        descriptor.chunkSize
-                    }
-
-                    if (uploadedSet.contains(chunkIndex)) {
-                        // Skip already uploaded chunk for resume
-                        skipFully(inputStream, expectedBytes.toLong())
-                        bytesReadTotal += expectedBytes
-                        continue
-                    }
-
-                    val read = readExact(inputStream, buffer, expectedBytes)
-                    val plaintextChunk = buffer.copyOfRange(0, read)
-
-                    val encryptedChunk = FileChunkCipher.encryptChunk(fileKey, fileId, chunkIndex, plaintextChunk)
-                    uploadChunkToRelay(relayBaseHttpUrl, fileId, chunkIndex, encryptedChunk)
-
-                    bytesReadTotal += read
-                    updateProgress(
-                        FileTransferProgress.Uploading(
-                            fileId = fileId,
-                            uploadedBytes = bytesReadTotal,
-                            totalBytes = descriptor.fileSize,
-                            currentChunk = chunkIndex + 1,
-                            totalChunks = descriptor.totalChunks
-                        )
-                    )
+            for (chunkIndex in 0 until descriptor.totalChunks) {
+                if (activeTransfers[fileId] != true) {
+                    throw CancellationException("Upload cancelled for $fileId")
                 }
-            } ?: error("Could not open input file")
 
-            // 3. Mark complete on relay
+                val expectedBytes = if (chunkIndex == descriptor.totalChunks - 1) {
+                    (descriptor.fileSize - (chunkIndex.toLong() * descriptor.chunkSize)).toInt()
+                } else {
+                    descriptor.chunkSize
+                }
+
+                if (!chunksToSend.contains(chunkIndex)) {
+                    bytesReadTotal += expectedBytes
+                    continue
+                }
+
+                // Read chunk directly from local source file
+                val plaintextChunk = readChunkFromUri(uri, chunkIndex.toLong() * descriptor.chunkSize, expectedBytes)
+                val encryptedChunk = FileChunkCipher.encryptChunk(fileKey, fileId, chunkIndex, plaintextChunk)
+
+                uploadChunkToRelay(relayBaseHttpUrl, fileId, chunkIndex, encryptedChunk)
+
+                bytesReadTotal += plaintextChunk.size
+                updateProgress(
+                    FileTransferProgress.Uploading(
+                        fileId = fileId,
+                        uploadedBytes = bytesReadTotal,
+                        totalBytes = descriptor.fileSize,
+                        currentChunk = chunkIndex + 1,
+                        totalChunks = descriptor.totalChunks
+                    )
+                )
+            }
+
+            // 2. Mark transit session complete on relay
             completeFileOnRelay(relayBaseHttpUrl, fileId)
             updateProgress(FileTransferProgress.Completed(fileId, uri.toString(), descriptor.fileSize))
         }.also {
@@ -147,7 +138,8 @@ class LargeFileTransferManager @Inject constructor(
     }
 
     /**
-     * Downloads file chunks from the relay, decrypts them, and streams them to a local destination file.
+     * Streams file chunks from the relay directly into a local .partial file, tracking received chunks in .part_meta.
+     * Performs final SHA-256 validation before atomically renaming to the destination file.
      */
     suspend fun downloadFile(
         relayBaseHttpUrl: String,
@@ -160,36 +152,62 @@ class LargeFileTransferManager @Inject constructor(
             val fileKey = Base64.decode(descriptor.fileKeyBase64, Base64.NO_WRAP)
 
             if (!destinationFile.parentFile.exists()) destinationFile.parentFile.mkdirs()
-            val tempFile = File(destinationFile.parentFile, ".download_${fileId}.tmp")
+            val partialFile = File(destinationFile.parentFile, "${destinationFile.name}.partial")
+            val metaFile = File(destinationFile.parentFile, ".${destinationFile.name}.part_meta")
 
-            var downloadedBytes = 0L
-            FileOutputStream(tempFile, false).use { outputStream ->
+            // Load locally received chunk indexes for end-to-end resume
+            val receivedChunks = loadLocalReceivedChunks(metaFile)
+
+            var downloadedBytes = receivedChunks.size.toLong() * descriptor.chunkSize
+            if (downloadedBytes > descriptor.fileSize) downloadedBytes = descriptor.fileSize
+
+            RandomAccessFile(partialFile, "rw").use { raf ->
+                raf.setLength(descriptor.fileSize)
+
                 for (chunkIndex in 0 until descriptor.totalChunks) {
                     if (activeTransfers[fileId] != true) {
                         throw CancellationException("Download cancelled for $fileId")
                     }
 
+                    if (receivedChunks.contains(chunkIndex)) {
+                        continue
+                    }
+
                     val encryptedBytes = downloadChunkFromRelay(relayBaseHttpUrl, fileId, chunkIndex)
                     val decryptedBytes = FileChunkCipher.decryptChunk(fileKey, fileId, chunkIndex, encryptedBytes)
 
-                    outputStream.write(decryptedBytes)
-                    downloadedBytes += decryptedBytes.size
+                    raf.seek(chunkIndex.toLong() * descriptor.chunkSize)
+                    raf.write(decryptedBytes)
+
+                    receivedChunks.add(chunkIndex)
+                    saveLocalReceivedChunks(metaFile, receivedChunks)
+
+                    downloadedBytes = (downloadedBytes + decryptedBytes.size).coerceAtMost(descriptor.fileSize)
 
                     updateProgress(
                         FileTransferProgress.Downloading(
                             fileId = fileId,
                             downloadedBytes = downloadedBytes,
                             totalBytes = descriptor.fileSize,
-                            currentChunk = chunkIndex + 1,
+                            currentChunk = receivedChunks.size,
                             totalChunks = descriptor.totalChunks
                         )
                     )
                 }
             }
 
-            if (tempFile.renameTo(destinationFile)) {
+            // Verify final SHA-256 integrity check on the complete local .partial file
+            val actualSha256 = calculateFileSha256(partialFile)
+            require(actualSha256.equals(descriptor.sha256, ignoreCase = true)) {
+                partialFile.delete()
+                metaFile.delete()
+                "File integrity verification failed (SHA-256 mismatch)"
+            }
+
+            if (partialFile.renameTo(destinationFile)) {
+                metaFile.delete()
                 updateProgress(FileTransferProgress.Completed(fileId, destinationFile.absolutePath, descriptor.fileSize))
-                // Acknowledge & delete from relay
+                // Acknowledge & clear transient session on relay
                 runCatching { deleteFileFromRelay(relayBaseHttpUrl, fileId) }
                 destinationFile
             } else {
@@ -203,6 +221,42 @@ class LargeFileTransferManager @Inject constructor(
     fun cancel(fileId: String) {
         activeTransfers[fileId] = false
         updateProgress(FileTransferProgress.Cancelled(fileId))
+    }
+
+    private fun loadLocalReceivedChunks(metaFile: File): MutableSet<Int> {
+        if (!metaFile.exists()) return mutableSetOf()
+        return runCatching {
+            metaFile.readLines()
+                .mapNotNull { it.trim().toIntOrNull() }
+                .toMutableSet()
+        }.getOrDefault(mutableSetOf())
+    }
+
+    private fun saveLocalReceivedChunks(metaFile: File, chunks: Set<Int>) {
+        runCatching {
+            metaFile.writeText(chunks.joinToString("\n"))
+        }
+    }
+
+    private fun calculateFileSha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { stream ->
+            val buf = ByteArray(64 * 1024)
+            var r: Int
+            while (stream.read(buf).also { r = it } > 0) {
+                digest.update(buf, 0, r)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun readChunkFromUri(uri: Uri, offset: Long, length: Int): ByteArray {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            skipFully(stream, offset)
+            val buf = ByteArray(length)
+            val read = readExact(stream, buf, length)
+            return buf.copyOfRange(0, read)
+        } ?: error("Could not open source file URI")
     }
 
     private fun updateProgress(progressItem: FileTransferProgress) {
@@ -276,24 +330,6 @@ class LargeFileTransferManager @Inject constructor(
         conn.outputStream.use { it.write(json.toString().toByteArray(Charsets.UTF_8)) }
         val code = conn.responseCode
         require(code in 200..299) { "Failed to init file on relay: HTTP $code" }
-    }
-
-    private fun queryUploadedChunks(relayUrl: String, fileId: String): Set<Int> {
-        return runCatching {
-            val url = URL("$relayUrl/files/status/$fileId")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-            }
-            if (conn.responseCode != 200) return emptySet()
-            val text = conn.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-            val json = JSONObject(text)
-            val array = json.optJSONArray("uploaded_chunks") ?: JSONArray()
-            val set = mutableSetOf<Int>()
-            for (i in 0 until array.length()) set.add(array.getInt(i))
-            set
-        }.getOrDefault(emptySet())
     }
 
     private fun uploadChunkToRelay(relayUrl: String, fileId: String, chunkIndex: Int, chunkData: ByteArray) {
