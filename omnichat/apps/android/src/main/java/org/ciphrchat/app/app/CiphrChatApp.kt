@@ -8,6 +8,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,7 @@ import org.ciphrchat.app.identity.IdentityRepository
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.LocalIdentity
 import org.ciphrchat.app.backup.RecoveryManager
+import org.ciphrchat.app.privacy.PrivacyManager
 import org.ciphrchat.app.transport.TransportRegistry
 import org.ciphrchat.app.transport.TransportRuntimeManager
 import org.ciphrchat.app.transport.AndroidCapabilityDetector
@@ -44,6 +46,7 @@ class OnboardingViewModel @Inject constructor(
     private val transportRuntime: TransportRuntimeManager,
     private val transportRegistry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector,
+    private val privacyManager: PrivacyManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     var identity by mutableStateOf<LocalIdentity?>(null)
@@ -63,6 +66,9 @@ class OnboardingViewModel @Inject constructor(
 
     val transportStates = transportRegistry.states()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val isIpPrivacyEnabled = privacyManager.isIpPrivacyEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
     init {
         viewModelScope.launch {
@@ -119,83 +125,23 @@ class OnboardingViewModel @Inject constructor(
 
     fun exportBackup(uri: Uri, password: String) {
         viewModelScope.launch {
-            backupMessage = "Creating encrypted backup…"
+            backupMessage = "Exporting encrypted backup…"
             val result = context.contentResolver.openOutputStream(uri)?.let {
                 recoveryManager.exportRecoveryFile(it, password)
-            } ?: Result.failure(IllegalStateException("Could not create backup file"))
-            backupMessage = result.fold(
-                onSuccess = { "Encrypted identity backup saved" },
-                onFailure = { it.message ?: "Backup failed" }
-            )
-        }
-    }
-    fun isOnboarded() = appState.isOnboarded
-}
-
-@HiltViewModel
-class ConnectViewModel @Inject constructor(
-    private val invitationService: InvitationService,
-    private val transportRegistry: TransportRegistry,
-    private val capabilityDetector: AndroidCapabilityDetector,
-    private val transportRuntime: TransportRuntimeManager
-) : ViewModel() {
-    var status by mutableStateOf<String?>(null)
-        private set
-    var nearbyStatus by mutableStateOf<String?>(null)
-        private set
-    var connectionPermissions by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    val transportStates = transportRegistry.states()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    init {
-        refreshConnections()
-    }
-
-    fun refreshConnections() {
-        connectionPermissions = capabilityDetector.refresh().missingPermissions
-        transportRuntime.startAll()
-    }
-
-    fun importInvitation(raw: String) {
-        if (raw.isBlank()) return
-        viewModelScope.launch {
-            importInvitationResult(raw)
-        }
-    }
-
-    suspend fun importInvitationResult(raw: String): Result<String> {
-        if (raw.isBlank()) return Result.failure(IllegalArgumentException("The invitation is empty"))
-        return invitationService.importInvitation(raw)
-            .map { contact ->
-                status = "Paired with ${contact.displayName}"
-                contact.contactId
-            }
-            .onFailure { status = it.message ?: "Invitation could not be imported" }
-    }
-
-    fun findNearby() {
-        viewModelScope.launch {
-            nearbyStatus = "Searching nearby connections…"
-            val localAdapters = transportRegistry.all().filter {
-                it.capabilities.contains(org.ciphrchat.app.transport.TransportCapability.DISCOVERY)
-            }
-            val peers = mutableListOf<org.ciphrchat.app.transport.DiscoveredPeer>()
-            for (adapter in localAdapters) {
-                runCatching {
-                    adapter.start().getOrThrow()
-                    kotlinx.coroutines.delay(1_500)
-                    peers += adapter.discoverPeers().getOrDefault(emptyList())
-                }
-            }
-            nearbyStatus = if (peers.isEmpty()) {
-                "No paired nearby contacts found"
-            } else {
-                "Found ${peers.size} nearby connection${if (peers.size == 1) "" else "s"}"
+            } ?: Result.failure(IllegalStateException("Could not open backup destination"))
+            result.onSuccess {
+                backupMessage = "Identity backed up securely"
+            }.onFailure {
+                backupMessage = it.message ?: "Backup failed"
             }
         }
     }
+
+    fun toggleIpPrivacy(enabled: Boolean) {
+        privacyManager.setIpPrivacyEnabled(enabled)
+    }
+
+    fun isOnboarded(): Boolean = appState.isOnboarded.value
 }
 
 @Composable
@@ -223,6 +169,8 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         backupUri = uri
         showBackupPassword = uri != null
     }
+
+    val isIpPrivacyEnabled by viewModel.isIpPrivacyEnabled.collectAsState()
 
     LaunchedEffect(viewModel.restoreCompleted) {
         if (viewModel.restoreCompleted) {
@@ -306,7 +254,10 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
             ) { entry ->
                 val convId = entry.arguments?.getString("conversationId") ?: ""
-                ChatScreen(contactName = convId, onBack = { navController.popBackStack() })
+                ChatScreen(
+                    contactName = convId,
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(AppRoute.Scanner.route) {
                 val connectViewModel: ConnectViewModel = hiltViewModel()
@@ -355,6 +306,8 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                     onBackupIdentity = {
                         backupPicker.launch("ciphrchat-recovery.ciphr")
                     },
+                    isIpPrivacyEnabled = isIpPrivacyEnabled,
+                    onToggleIpPrivacy = viewModel::toggleIpPrivacy,
                     backupMessage = viewModel.backupMessage
                 )
             }
@@ -369,30 +322,38 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
             },
             title = { androidx.compose.material3.Text("Restore identity") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
-                    value = recoveryPassword,
-                    onValueChange = { recoveryPassword = it },
-                    label = { androidx.compose.material3.Text("Recovery password") },
-                    singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
-                )
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Enter the password chosen when this recovery file was exported.")
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = recoveryPassword,
+                        onValueChange = { recoveryPassword = it },
+                        label = { androidx.compose.material3.Text("Recovery password") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
-                    enabled = recoveryPassword.length >= 12 && recoveryUri != null,
                     onClick = {
                         val uri = recoveryUri
-                        if (uri != null) viewModel.restore(uri, recoveryPassword)
+                        val pass = recoveryPassword
                         showRecoveryPassword = false
                         recoveryPassword = ""
-                    }
-                ) { androidx.compose.material3.Text("Restore") }
+                        if (uri != null) viewModel.restore(uri, pass)
+                    },
+                    enabled = recoveryPassword.length >= 12
+                ) {
+                    androidx.compose.material3.Text("Restore")
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     showRecoveryPassword = false
                     recoveryPassword = ""
-                }) { androidx.compose.material3.Text("Cancel") }
+                }) {
+                    androidx.compose.material3.Text("Cancel")
+                }
             }
         )
     }
@@ -403,33 +364,40 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                 showBackupPassword = false
                 backupPassword = ""
             },
-            title = { androidx.compose.material3.Text("Back up identity") },
+            title = { androidx.compose.material3.Text("Protect your backup") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
-                    value = backupPassword,
-                    onValueChange = { backupPassword = it },
-                    label = { androidx.compose.material3.Text("New recovery password") },
-                    supportingText = { androidx.compose.material3.Text("Use at least 12 characters and keep it safe.") },
-                    singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
-                )
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Choose a strong passphrase (at least 12 characters). It will encrypt your complete identity and conversation history.")
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 8.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = backupPassword,
+                        onValueChange = { backupPassword = it },
+                        label = { androidx.compose.material3.Text("Passphrase") },
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(
-                    enabled = backupPassword.length >= 12 && backupUri != null,
                     onClick = {
                         val uri = backupUri
-                        if (uri != null) viewModel.exportBackup(uri, backupPassword)
+                        val pass = backupPassword
                         showBackupPassword = false
                         backupPassword = ""
-                    }
-                ) { androidx.compose.material3.Text("Back up") }
+                        if (uri != null) viewModel.exportBackup(uri, pass)
+                    },
+                    enabled = backupPassword.length >= 12
+                ) {
+                    androidx.compose.material3.Text("Save encrypted backup")
+                }
             },
             dismissButton = {
                 androidx.compose.material3.TextButton(onClick = {
                     showBackupPassword = false
                     backupPassword = ""
-                }) { androidx.compose.material3.Text("Cancel") }
+                }) {
+                    androidx.compose.material3.Text("Cancel")
+                }
             }
         )
     }

@@ -382,6 +382,7 @@ dependencies = [
  "futures",
  "libp2p",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

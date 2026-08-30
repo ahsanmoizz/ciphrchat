@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.ciphrchat.app.BuildConfig
+import org.ciphrchat.app.privacy.PrivacyManager
 import org.ciphrchat.app.ui.components.CiphrSectionHeader
 import org.ciphrchat.app.ui.theme.*
 
@@ -22,6 +23,8 @@ fun SettingsScreen(
     onBackupIdentity: () -> Unit = {},
     onShowQr: () -> Unit = {},
     onRestoreIdentity: () -> Unit = {},
+    isIpPrivacyEnabled: Boolean = true,
+    onToggleIpPrivacy: (Boolean) -> Unit = {},
     backupMessage: String? = null
 ) {
     val scrollState = rememberScrollState()
@@ -45,6 +48,32 @@ fun SettingsScreen(
         SettingsInfoRow("Display name", "Edit from a future profile release")
         SettingsRow("Back up identity") { onBackupIdentity() }
         SettingsRow("Restore identity", onRestoreIdentity)
+
+        Spacer(Modifier.height(16.dp))
+        CiphrSectionHeader("Internet Privacy")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                Text("Hide my IP from other users", style = MaterialTheme.typography.bodyLarge, color = CiphrText)
+                Text(
+                    "Internet traffic is routed through CiphrChat relay infrastructure so other users do not receive your public IP address.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CiphrTextSecondary
+                )
+            }
+            Switch(
+                checked = isIpPrivacyEnabled,
+                onCheckedChange = onToggleIpPrivacy,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = CiphrPrimary,
+                    checkedTrackColor = CiphrPrimary.copy(alpha = 0.5f)
+                )
+            )
+        }
+        HorizontalDivider(color = CiphrBorder)
 
         Spacer(Modifier.height(16.dp))
         CiphrSectionHeader("Connections")

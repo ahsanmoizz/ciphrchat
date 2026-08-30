@@ -1,5 +1,6 @@
 package org.ciphrchat.app.messaging
 
+import org.ciphrchat.app.files.FileTransferDescriptor
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -14,12 +15,14 @@ object MessageContentCodec {
     private val MAGIC = "CIPHR_CONTENT_1".toByteArray(Charsets.US_ASCII)
     private const val TEXT = 1
     private const val ATTACHMENT = 2
+    private const val FILE_DESCRIPTOR = 3
     private const val MAX_FIELD_BYTES = 4 * 1024
     private const val MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
     data class Decoded(
         val text: String? = null,
-        val attachment: Attachment? = null
+        val attachment: Attachment? = null,
+        val fileDescriptor: FileTransferDescriptor? = null
     )
 
     data class Attachment(
@@ -48,6 +51,22 @@ object MessageContentCodec {
         encoded.toByteArray()
     }
 
+    fun encodeFileDescriptor(descriptor: FileTransferDescriptor): ByteArray = ByteArrayOutputStream().use { encoded ->
+        DataOutputStream(encoded).use { output ->
+            output.write(MAGIC)
+            output.writeByte(FILE_DESCRIPTOR)
+            writeField(output, descriptor.fileId.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, descriptor.fileName.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            output.writeLong(descriptor.fileSize)
+            writeField(output, descriptor.mimeType.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            output.writeInt(descriptor.chunkCount)
+            output.writeInt(descriptor.chunkSize)
+            writeField(output, descriptor.fileKeyHex.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, descriptor.sha256Hex.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+        }
+        encoded.toByteArray()
+    }
+
     fun decode(bytes: ByteArray): Decoded {
         if (!bytes.startsWith(MAGIC)) return Decoded(text = bytes.toString(Charsets.UTF_8))
         return runCatching {
@@ -61,6 +80,28 @@ object MessageContentCodec {
                             readField(input, MAX_ATTACHMENT_BYTES)
                         )
                     )
+                    FILE_DESCRIPTOR -> {
+                        val fileId = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val fileName = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val fileSize = input.readLong()
+                        val mimeType = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val chunkCount = input.readInt()
+                        val chunkSize = input.readInt()
+                        val fileKeyHex = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val sha256Hex = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        Decoded(
+                            fileDescriptor = FileTransferDescriptor(
+                                fileId = fileId,
+                                fileName = fileName,
+                                fileSize = fileSize,
+                                mimeType = mimeType,
+                                chunkCount = chunkCount,
+                                chunkSize = chunkSize,
+                                fileKeyHex = fileKeyHex,
+                                sha256Hex = sha256Hex
+                            )
+                        )
+                    }
                     else -> throw IllegalArgumentException("Unsupported CiphrChat content kind")
                 }
             }
