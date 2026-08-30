@@ -32,12 +32,19 @@ import org.ciphrchat.app.calling.CallSignal
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.ReciprocalPairingPolicy
 import org.whispersystems.libsignal.SignalProtocolAddress
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
+import org.ciphrchat.app.BuildConfig
+import org.ciphrchat.app.files.LargeFileTransferManager
+import org.ciphrchat.app.files.FileTransferDescriptor
+import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class PersistentMessageRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val database: AppDatabase,
     private val router: AutomaticRouter,
     private val contacts: ContactRepository,
@@ -47,6 +54,7 @@ class PersistentMessageRepository @Inject constructor(
     private val inboundBus: TransportInboundBus,
     private val identity: IdentityRepository,
     private val attachmentStore: AttachmentStore,
+    private val largeFileManager: LargeFileTransferManager,
     private val invitationService: InvitationService,
     private val retryScheduler: PendingMessageRetryScheduler,
     private val audioCallManager: AudioCallManager
@@ -164,28 +172,104 @@ class PersistentMessageRepository @Inject constructor(
         uri: Uri
     ): Result<ChatMessage> = withContext(Dispatchers.IO) {
         runCatching {
-            val input = attachmentStore.read(uri)
-            require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
-            val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
             val contact = contacts.find(recipientId)
                 ?: error("Contact is not paired: scan or enter their invitation first")
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
             if (!sessions.hasSession(address)) {
                 sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
             }
-            sendContent(
-                conversationId = conversationId,
-                recipientId = recipientId,
-                address = address,
-                plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
-                body = "Attachment: ${input.fileName}",
-                attachmentFileName = input.fileName,
-                attachmentMimeType = input.mimeType,
-                attachmentStoragePath = stored.path,
-                attachmentSizeBytes = stored.size,
-                attachmentSha256 = stored.sha256
-            )
+
+            val fileSize = getUriFileSize(uri)
+            require(fileSize > 0) { "The selected attachment is empty" }
+            require(fileSize <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES) {
+                "Attachment exceeds the 5 GiB maximum limit"
+            }
+
+            if (fileSize > AttachmentStore.MAX_ATTACHMENT_BYTES) {
+                // > 5 MiB: Zero-retention large-file streaming transit path
+                // Retain persistable URI permission where supported for resumable reads
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+
+                val fileName = getUriFileName(uri)
+                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                val localId = identity.current()?.publicId ?: "self"
+
+                val (descriptor, fileKey) = largeFileManager.prepareDescriptor(
+                    uri = uri,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    senderId = localId,
+                    recipientId = contact.contactId
+                ).getOrThrow()
+
+                val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL.ifBlank { "https://relay.ciphrchat.org" }
+
+                // Launch concurrent streaming chunk upload through the zero-retention transit relay
+                networkScope.launch {
+                    largeFileManager.uploadFile(
+                        relayBaseHttpUrl = relayHttpUrl,
+                        uri = uri,
+                        descriptor = descriptor,
+                        fileKey = fileKey
+                    )
+                }
+
+                // Send Signal-encrypted message containing ONLY the descriptor metadata and per-file key
+                sendContent(
+                    conversationId = conversationId,
+                    recipientId = recipientId,
+                    address = address,
+                    plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
+                    body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
+                    attachmentFileName = descriptor.fileName,
+                    attachmentMimeType = descriptor.mimeType,
+                    attachmentStoragePath = "large_file:${descriptor.fileId}",
+                    attachmentSizeBytes = descriptor.fileSize,
+                    attachmentSha256 = descriptor.sha256
+                )
+            } else {
+                // <= 5 MiB: Existing small attachment legacy path
+                val input = attachmentStore.read(uri)
+                require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
+                val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
+                sendContent(
+                    conversationId = conversationId,
+                    recipientId = recipientId,
+                    address = address,
+                    plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
+                    body = "Attachment: ${input.fileName}",
+                    attachmentFileName = input.fileName,
+                    attachmentMimeType = input.mimeType,
+                    attachmentStoragePath = stored.path,
+                    attachmentSizeBytes = stored.size,
+                    attachmentSha256 = stored.sha256
+                )
+            }
         }
+    }
+
+    override suspend fun getOrDownloadLargeFile(message: ChatMessage): File? = withContext(Dispatchers.IO) {
+        val fileName = message.attachmentFileName ?: return@withContext null
+        val downloadDir = File(context.filesDir, "CiphrChat/downloads").apply { mkdirs() }
+        val destinationFile = File(downloadDir, fileName)
+
+        if (destinationFile.exists() && (message.attachmentSizeBytes <= 0L || destinationFile.length() == message.attachmentSizeBytes)) {
+            return@withContext destinationFile
+        }
+
+        val sha256 = message.attachmentSha256
+        val fileId = message.attachmentStoragePath?.removePrefix("large_file:")
+        val descriptor = (if (!sha256.isNullOrBlank()) largeFileManager.findDescriptorBySha256(sha256) else null)
+            ?: (if (!fileId.isNullOrBlank()) largeFileManager.findDescriptorByFileId(fileId) else null)
+            ?: return@withContext null
+
+        val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL.ifBlank { "https://relay.ciphrchat.org" }
+        largeFileManager.downloadFile(relayHttpUrl, descriptor, destinationFile).getOrNull()
     }
 
     override suspend fun clearConversation(conversationId: String): Result<Int> =
@@ -195,6 +279,7 @@ class PersistentMessageRepository @Inject constructor(
                 val messages = dao.listMessagesForConversation(conversationId)
                 val deleted = dao.deleteConversation(conversationId)
                 messages.mapNotNull { it.attachmentStoragePath }
+                    .filter { !it.startsWith("large_file:") }
                     .distinct()
                     .forEach(attachmentStore::delete)
                 deleted
@@ -445,6 +530,32 @@ class PersistentMessageRepository @Inject constructor(
             }
         }
 
+        val fileDescriptor = decoded.fileDescriptor
+        if (fileDescriptor != null) {
+            largeFileManager.registerDescriptor(fileDescriptor)
+            val localId = identity.current()?.publicId ?: "local"
+            dao.insertMessage(
+                MessageEntity(
+                    id = messageId,
+                    conversationId = senderId,
+                    senderId = senderId,
+                    recipientId = localId,
+                    body = contentCipher.encrypt("Large File: ${fileDescriptor.fileName} (${formatBytes(fileDescriptor.fileSize)})"),
+                    encryptedPayload = ciphertext,
+                    createdAtEpochMs = createdAtEpochMs,
+                    direction = MessageDirection.INCOMING,
+                    status = MessageStatus.DELIVERED,
+                    selectedTransport = transport,
+                    attachmentFileName = fileDescriptor.fileName,
+                    attachmentMimeType = fileDescriptor.mimeType,
+                    attachmentStoragePath = "large_file:${fileDescriptor.fileId}",
+                    attachmentSizeBytes = fileDescriptor.fileSize,
+                    attachmentSha256 = fileDescriptor.sha256
+                )
+            )
+            return
+        }
+
         val attachment = decoded.attachment
         val stored = attachment?.let {
             require(it.bytes.size <= AttachmentStore.MAX_ATTACHMENT_BYTES) { "Attachment exceeds the supported size" }
@@ -470,6 +581,33 @@ class PersistentMessageRepository @Inject constructor(
                 attachmentSha256 = stored?.sha256
             )
         )
+    }
+
+    private fun getUriFileSize(uri: Uri): Long {
+        return runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use {
+                it.statSize
+            }
+        }.getOrNull()?.takeIf { it > 0 } ?: runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+            }
+        }.getOrDefault(0L)
+    }
+
+    private fun getUriFileName(uri: Uri): String {
+        return runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment ?: "file"
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     private suspend fun updateDelivery(messageId: String, status: MessageStatus) {

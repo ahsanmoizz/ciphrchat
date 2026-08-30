@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import android.net.Uri
 import java.io.File
+import org.ciphrchat.app.files.LargeFileTransferManager
 import org.ciphrchat.app.identity.ContactRepository
 import javax.inject.Inject
 
@@ -21,13 +22,17 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MessageRepository,
     private val contacts: ContactRepository,
-    private val attachmentStore: AttachmentStore
+    private val attachmentStore: AttachmentStore,
+    private val largeFileManager: LargeFileTransferManager
 ) : ViewModel() {
 
     val conversationId: String = savedStateHandle["conversationId"] ?: ""
 
     val messages = repository.messages(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val fileTransferProgress = largeFileManager.progress
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     private val _contactName = MutableStateFlow<String?>(null)
     val contactName = _contactName.asStateFlow()
@@ -55,6 +60,10 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun cancelLargeFile(fileId: String) {
+        largeFileManager.cancel(fileId)
+    }
+
     fun clearNotice() { _notice.value = null }
 
     fun clearChat(onComplete: (Boolean) -> Unit = {}) {
@@ -72,15 +81,22 @@ class ChatViewModel @Inject constructor(
     }
 
     fun materializeAttachment(message: ChatMessage, onReady: (Result<File>) -> Unit) {
-        val path = message.attachmentStoragePath
         val name = message.attachmentFileName
-        if (path.isNullOrBlank() || name.isNullOrBlank()) {
+        if (name.isNullOrBlank()) {
             onReady(Result.failure(IllegalStateException("Attachment is unavailable")))
             return
         }
+        val path = message.attachmentStoragePath
         viewModelScope.launch {
             onReady(withContext(Dispatchers.IO) {
-                runCatching { attachmentStore.materialize(path, name) }
+                runCatching {
+                    if (path != null && !path.startsWith("large_file:")) {
+                        attachmentStore.materialize(path, name)
+                    } else {
+                        repository.getOrDownloadLargeFile(message)
+                            ?: error("Could not download or materialize large file")
+                    }
+                }
             })
         }
     }

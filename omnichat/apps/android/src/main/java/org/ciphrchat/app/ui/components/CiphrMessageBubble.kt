@@ -143,6 +143,7 @@ private fun routeDotColor(name: String?) = when {
 }
 
 private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024 * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
     bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
     else -> "$bytes B"

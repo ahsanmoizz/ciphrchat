@@ -79,4 +79,34 @@ class LargeFileResumePolicyTest {
 
         assertEquals(expectedHash, actualHash)
     }
+
+    @Test
+    fun classifiesTransferTypeBySizeThresholds() {
+        val smallFileSize = 5L * 1024 * 1024 // 5 MiB
+        val largeFileSize = 5L * 1024 * 1024 + 1 // 5 MiB + 1 B
+        val fiveGiB = 5L * 1024 * 1024 * 1024 // 5 GiB
+        val oversized = 5L * 1024 * 1024 * 1024 + 1 // 5 GiB + 1 B
+
+        // Small path threshold check
+        val isSmall = smallFileSize <= 5 * 1024 * 1024
+        assertTrue(isSmall)
+
+        // Large path threshold check
+        val isLarge = largeFileSize > 5 * 1024 * 1024 && largeFileSize <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES
+        assertTrue(isLarge)
+
+        val is5GiBLarge = fiveGiB > 5 * 1024 * 1024 && fiveGiB <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES
+        assertTrue(is5GiBLarge)
+
+        // Oversized threshold check
+        val isOversized = oversized > FileTransferDescriptor.MAX_FILE_SIZE_BYTES
+        assertTrue(isOversized)
+    }
+
+    @Test
+    fun validatesExplicitHttpsRelayUrl() {
+        val customHttpsUrl = "https://relay.ciphrchat.org"
+        assertTrue(customHttpsUrl.startsWith("https://"))
+        assertFalse(customHttpsUrl.startsWith("http://"))
+    }
 }

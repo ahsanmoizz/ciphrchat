@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import org.ciphrchat.app.blockchain.RelayAddressResolver
 import org.ciphrchat.app.worker.PendingMessageRetryScheduler
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +21,8 @@ import javax.inject.Singleton
 class InternetTransportAdapter @Inject constructor(
     private val rustP2pManager: RustP2pManager,
     private val contacts: ContactRepository,
-    private val retryScheduler: PendingMessageRetryScheduler
+    private val retryScheduler: PendingMessageRetryScheduler,
+    private val relayResolver: RelayAddressResolver
 ) : TransportAdapter {
     override val kind: TransportKind = TransportKind.INTERNET_DIRECT
     override val capabilities: Set<TransportCapability> = setOf(
@@ -86,12 +88,13 @@ class InternetTransportAdapter @Inject constructor(
 
     override suspend fun start(): Result<Unit> {
         if (started) return Result.success(Unit)
-        if (BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isBlank()) {
+        val selectedRelay = relayResolver.resolveRelayAddress()
+        if (selectedRelay.isBlank()) {
             val error = IllegalStateException("No public relay is configured for this build")
             _state.value = TransportState(TransportKind.INTERNET_DIRECT, TransportAvailability.UNAVAILABLE, error.message!!)
             return Result.failure(error)
         }
-        val result = rustP2pManager.startSwarm()
+        val result = rustP2pManager.startSwarm(selectedRelay)
         result.onSuccess {
             started = true
             _state.value = if (rustP2pManager.mailboxReady.value) {

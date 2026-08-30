@@ -40,6 +40,14 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "CIPHRCHAT_TURN_CREDENTIAL_URL", "\"$turnCredentialUrl\"")
 
+        val fileRelayHttpUrl = project.providers.gradleProperty("ciphrchatFileRelayHttpUrl")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_FILE_RELAY_HTTP_URL"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_FILE_RELAY_HTTP_URL", "\"$fileRelayHttpUrl\"")
+
         val blockchainRpcUrl = project.providers.gradleProperty("ciphrchatBlockchainRpcUrl")
             .orElse(project.providers.environmentVariable("CIPHRCHAT_BLOCKCHAIN_RPC_URL"))
             .orElse("")

@@ -36,6 +36,25 @@ class LargeFileTransferManager @Inject constructor(
     private val _progress = MutableStateFlow<Map<String, FileTransferProgress>>(emptyMap())
     val progress: StateFlow<Map<String, FileTransferProgress>> = _progress.asStateFlow()
 
+    private val descriptorsBySha256 = ConcurrentHashMap<String, FileTransferDescriptor>()
+    private val descriptorsByFileId = ConcurrentHashMap<String, FileTransferDescriptor>()
+
+    fun registerDescriptor(descriptor: FileTransferDescriptor) {
+        descriptorsBySha256[descriptor.sha256] = descriptor
+        descriptorsByFileId[descriptor.fileId] = descriptor
+        saveDescriptorToDisk(descriptor)
+    }
+
+    fun findDescriptorBySha256(sha256: String): FileTransferDescriptor? {
+        descriptorsBySha256[sha256]?.let { return it }
+        return loadDescriptorFromDiskBySha(sha256)
+    }
+
+    fun findDescriptorByFileId(fileId: String): FileTransferDescriptor? {
+        descriptorsByFileId[fileId]?.let { return it }
+        return loadDescriptorFromDiskByFileId(fileId)
+    }
+
     /**
      * Prepares a file descriptor for streaming upload, generating a per-file AES-256 random key.
      */
@@ -71,6 +90,7 @@ class LargeFileTransferManager @Inject constructor(
                 senderId = senderId,
                 recipientId = recipientId
             )
+            registerDescriptor(descriptor)
             Pair(descriptor, fileKey)
         }
     }
@@ -88,6 +108,7 @@ class LargeFileTransferManager @Inject constructor(
         runCatching {
             val fileId = descriptor.fileId
             activeTransfers[fileId] = true
+            registerDescriptor(descriptor)
 
             // 1. Initialize transient stream session on relay
             initFileOnRelay(relayBaseHttpUrl, descriptor)
@@ -149,6 +170,7 @@ class LargeFileTransferManager @Inject constructor(
         runCatching {
             val fileId = descriptor.fileId
             activeTransfers[fileId] = true
+            registerDescriptor(descriptor)
             val fileKey = Base64.decode(descriptor.fileKeyBase64, Base64.NO_WRAP)
 
             if (!destinationFile.parentFile.exists()) destinationFile.parentFile.mkdirs()
@@ -333,30 +355,65 @@ class LargeFileTransferManager @Inject constructor(
     }
 
     private fun uploadChunkToRelay(relayUrl: String, fileId: String, chunkIndex: Int, chunkData: ByteArray) {
-        val url = URL("$relayUrl/files/upload/$fileId/$chunkIndex")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/octet-stream")
-            setFixedLengthStreamingMode(chunkData.size)
-            doOutput = true
-            connectTimeout = 30_000
-            readTimeout = 30_000
+        var attempts = 0
+        val maxAttempts = 6
+        while (attempts < maxAttempts) {
+            attempts++
+            val url = URL("$relayUrl/files/upload/$fileId/$chunkIndex")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/octet-stream")
+                setFixedLengthStreamingMode(chunkData.size)
+                doOutput = true
+                connectTimeout = 30_000
+                readTimeout = 30_000
+            }
+            try {
+                conn.outputStream.use { it.write(chunkData) }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    return
+                } else if (code == 429 || code in 500..599) {
+                    Thread.sleep((attempts * 250L).coerceAtMost(2000L))
+                    continue
+                } else {
+                    error("Failed to upload chunk $chunkIndex: HTTP $code")
+                }
+            } catch (e: Exception) {
+                if (attempts >= maxAttempts) throw e
+                Thread.sleep((attempts * 250L).coerceAtMost(2000L))
+            }
         }
-        conn.outputStream.use { it.write(chunkData) }
-        val code = conn.responseCode
-        require(code in 200..299) { "Failed to upload chunk $chunkIndex: HTTP $code" }
+        error("Exceeded maximum retries uploading chunk $chunkIndex")
     }
 
     private fun downloadChunkFromRelay(relayUrl: String, fileId: String, chunkIndex: Int): ByteArray {
-        val url = URL("$relayUrl/files/download/$fileId/$chunkIndex")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 30_000
-            readTimeout = 30_000
+        var attempts = 0
+        val maxAttempts = 20
+        while (attempts < maxAttempts) {
+            attempts++
+            val url = URL("$relayUrl/files/download/$fileId/$chunkIndex")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 30_000
+                readTimeout = 30_000
+            }
+            try {
+                val code = conn.responseCode
+                if (code == 200) {
+                    return conn.inputStream.use { it.readBytes() }
+                } else if (code == 404 || code == 429 || code in 500..599) {
+                    Thread.sleep((attempts * 200L).coerceAtMost(1500L))
+                    continue
+                } else {
+                    error("Failed to download chunk $chunkIndex: HTTP $code")
+                }
+            } catch (e: Exception) {
+                if (attempts >= maxAttempts) throw e
+                Thread.sleep((attempts * 200L).coerceAtMost(1500L))
+            }
         }
-        val code = conn.responseCode
-        require(code == 200) { "Failed to download chunk $chunkIndex: HTTP $code" }
-        return conn.inputStream.use { it.readBytes() }
+        error("Exceeded maximum retries downloading chunk $chunkIndex")
     }
 
     private fun completeFileOnRelay(relayUrl: String, fileId: String) {
@@ -378,5 +435,61 @@ class LargeFileTransferManager @Inject constructor(
             readTimeout = 10_000
         }
         conn.responseCode
+    }
+
+    private fun saveDescriptorToDisk(descriptor: FileTransferDescriptor) {
+        runCatching {
+            val dir = File(context.filesDir, "CiphrChat/descriptors").apply { mkdirs() }
+            val file = File(dir, "${descriptor.fileId}.json")
+            val json = JSONObject()
+                .put("fileId", descriptor.fileId)
+                .put("fileName", descriptor.fileName)
+                .put("fileSize", descriptor.fileSize)
+                .put("mimeType", descriptor.mimeType)
+                .put("sha256", descriptor.sha256)
+                .put("chunkSize", descriptor.chunkSize)
+                .put("totalChunks", descriptor.totalChunks)
+                .put("fileKeyBase64", descriptor.fileKeyBase64)
+                .put("senderId", descriptor.senderId)
+                .put("recipientId", descriptor.recipientId)
+                .put("createdAtEpochMs", descriptor.createdAtEpochMs)
+            file.writeText(json.toString())
+        }
+    }
+
+    private fun loadDescriptorFromDiskByFileId(fileId: String): FileTransferDescriptor? = runCatching {
+        val file = File(context.filesDir, "CiphrChat/descriptors/$fileId.json")
+        if (!file.exists()) return null
+        parseDescriptorJson(JSONObject(file.readText()))
+    }.getOrNull()
+
+    private fun loadDescriptorFromDiskBySha(sha256: String): FileTransferDescriptor? = runCatching {
+        val dir = File(context.filesDir, "CiphrChat/descriptors")
+        if (!dir.exists()) return null
+        dir.listFiles()?.forEach { file ->
+            val desc = runCatching { parseDescriptorJson(JSONObject(file.readText())) }.getOrNull()
+            if (desc?.sha256 == sha256) {
+                descriptorsBySha256[sha256] = desc
+                descriptorsByFileId[desc.fileId] = desc
+                return desc
+            }
+        }
+        null
+    }.getOrNull()
+
+    private fun parseDescriptorJson(json: JSONObject): FileTransferDescriptor {
+        return FileTransferDescriptor(
+            fileId = json.getString("fileId"),
+            fileName = json.getString("fileName"),
+            fileSize = json.getLong("fileSize"),
+            mimeType = json.getString("mimeType"),
+            sha256 = json.getString("sha256"),
+            chunkSize = json.getInt("chunkSize"),
+            totalChunks = json.getInt("totalChunks"),
+            fileKeyBase64 = json.getString("fileKeyBase64"),
+            senderId = json.getString("senderId"),
+            recipientId = json.getString("recipientId"),
+            createdAtEpochMs = json.optLong("createdAtEpochMs", System.currentTimeMillis())
+        )
     }
 }
