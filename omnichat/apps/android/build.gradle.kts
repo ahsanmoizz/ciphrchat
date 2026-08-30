@@ -101,12 +101,6 @@ android {
                 "proguard-rules.pro"
             )
         }
-    }
-
-    testOptions {
-        unitTests.isReturnDefaultValues = true
-    }
-
     buildFeatures {
         compose = true
         buildConfig = true
