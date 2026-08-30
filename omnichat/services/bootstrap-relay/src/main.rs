@@ -1,7 +1,7 @@
 use axum::{
     body::Bytes,
-    extract::{Path as AxumPath, State},
-    http::StatusCode,
+    extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -835,6 +835,8 @@ pub fn generate_turn_credentials(
 
 async fn turn_credentials_handler(
     State(state): State<AppState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     body_bytes: Bytes,
 ) -> Result<
     (
@@ -862,17 +864,36 @@ async fn turn_credentials_handler(
         ));
     }
 
-    // 2. Enforce per-source-IP rate limiting (10 requests per minute)
-    let client_ip = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    // 2. Resolve real client IP: direct TCP peer or loopback proxy headers
+    let peer_ip = connect_info
+        .map(|ci| ci.0.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+
+    let mut client_ip = peer_ip;
+    if peer_ip.is_loopback() {
+        if let Some(forwarded_for) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first_ip_str) = forwarded_for.split(',').next().map(|s| s.trim()) {
+                if let Ok(parsed_ip) = first_ip_str.parse::<IpAddr>() {
+                    client_ip = parsed_ip;
+                }
+            }
+        } else if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            if let Ok(parsed_ip) = real_ip.trim().parse::<IpAddr>() {
+                client_ip = parsed_ip;
+            }
+        }
+    }
+
+    // 3. Enforce per-source-IP rate limiting (10 requests per minute per IP)
     if !state.rate_limiter.check_and_record(client_ip, now_sec) {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({ "error": "Rate limit exceeded. Maximum 10 requests per minute." })),
+            Json(serde_json::json!({ "error": "Rate limit exceeded. Maximum 10 requests per minute per IP." })),
         ));
     }
 
-    // 3. Parse JSON body if present
+    // 4. Parse JSON body if present
     let req: Option<TurnCredentialsRequest> = if body_bytes.is_empty() {
         None
     } else {
@@ -893,7 +914,7 @@ async fn turn_credentials_handler(
         .and_then(|r| r.username.as_deref())
         .unwrap_or("ciphr_user");
 
-    // 4. Validate username: 1..=64 chars, only alphanumeric, underscore, or hyphen
+    // 5. Validate username: 1..=64 chars, only alphanumeric, underscore, or hyphen
     if user_id.is_empty()
         || user_id.len() > 64
         || !user_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -905,7 +926,7 @@ async fn turn_credentials_handler(
         ));
     }
 
-    // 5. Generate credentials
+    // 6. Generate credentials
     let secret = env::var("TURN_STATIC_AUTH_SECRET").unwrap_or_default();
     if secret.trim().is_empty() {
         return Err((
@@ -1043,8 +1064,14 @@ async fn run_http_server(
             "/info",
             get(|State(state): State<AppState>| async move { Json(state.info) }),
         )
-        .route("/turn/credentials", post(turn_credentials_handler))
-        .route("/ciphrchat/turn-credentials/1", post(turn_credentials_handler))
+        .route(
+            "/turn/credentials",
+            post(turn_credentials_handler).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/ciphrchat/turn-credentials/1",
+            post(turn_credentials_handler).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/files/init", post(init_file_handler))
         .route(
             "/files/upload/{file_id}/{chunk_index}",
@@ -1060,7 +1087,11 @@ async fn run_http_server(
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1362,6 +1393,24 @@ mod tests {
             .is_err());
 
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn test_independent_ip_buckets() {
+        let limiter = RateLimiter::new(2);
+        let ip_a: IpAddr = "198.51.100.1".parse().unwrap();
+        let ip_b: IpAddr = "198.51.100.2".parse().unwrap();
+        let now = 1000u64;
+
+        // Exhaust IP A
+        assert!(limiter.check_and_record(ip_a, now));
+        assert!(limiter.check_and_record(ip_a, now + 1));
+        assert!(!limiter.check_and_record(ip_a, now + 2)); // IP A is now blocked
+
+        // IP B has its own independent bucket and must still be allowed
+        assert!(limiter.check_and_record(ip_b, now));
+        assert!(limiter.check_and_record(ip_b, now + 1));
+        assert!(!limiter.check_and_record(ip_b, now + 2));
     }
 
     #[test]
