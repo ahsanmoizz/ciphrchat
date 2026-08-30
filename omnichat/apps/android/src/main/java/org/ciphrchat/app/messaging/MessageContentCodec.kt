@@ -59,10 +59,13 @@ object MessageContentCodec {
             writeField(output, descriptor.fileName.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
             output.writeLong(descriptor.fileSize)
             writeField(output, descriptor.mimeType.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
-            output.writeInt(descriptor.chunkCount)
+            writeField(output, descriptor.sha256.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
             output.writeInt(descriptor.chunkSize)
-            writeField(output, descriptor.fileKeyHex.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
-            writeField(output, descriptor.sha256Hex.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            output.writeInt(descriptor.totalChunks)
+            writeField(output, descriptor.fileKeyBase64.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, descriptor.senderId.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            writeField(output, descriptor.recipientId.toByteArray(Charsets.UTF_8), MAX_FIELD_BYTES)
+            output.writeLong(descriptor.createdAtEpochMs)
         }
         encoded.toByteArray()
     }
@@ -85,20 +88,26 @@ object MessageContentCodec {
                         val fileName = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
                         val fileSize = input.readLong()
                         val mimeType = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
-                        val chunkCount = input.readInt()
+                        val sha256 = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
                         val chunkSize = input.readInt()
-                        val fileKeyHex = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
-                        val sha256Hex = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val totalChunks = input.readInt()
+                        val fileKeyBase64 = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val senderId = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val recipientId = readField(input, MAX_FIELD_BYTES).toString(Charsets.UTF_8)
+                        val createdAtEpochMs = input.readLong()
                         Decoded(
                             fileDescriptor = FileTransferDescriptor(
                                 fileId = fileId,
                                 fileName = fileName,
                                 fileSize = fileSize,
                                 mimeType = mimeType,
-                                chunkCount = chunkCount,
+                                sha256 = sha256,
                                 chunkSize = chunkSize,
-                                fileKeyHex = fileKeyHex,
-                                sha256Hex = sha256Hex
+                                totalChunks = totalChunks,
+                                fileKeyBase64 = fileKeyBase64,
+                                senderId = senderId,
+                                recipientId = recipientId,
+                                createdAtEpochMs = createdAtEpochMs
                             )
                         )
                     }
