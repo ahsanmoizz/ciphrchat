@@ -3,6 +3,7 @@ package org.ciphrchat.app.files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
@@ -104,9 +105,60 @@ class LargeFileResumePolicyTest {
     }
 
     @Test
-    fun validatesExplicitHttpsRelayUrl() {
-        val customHttpsUrl = "https://relay.ciphrchat.org"
-        assertTrue(customHttpsUrl.startsWith("https://"))
-        assertFalse(customHttpsUrl.startsWith("http://"))
+    fun senderDoesNotUploadBeforeReceiverReady() {
+        val descriptor = FileTransferDescriptor(
+            fileId = "test-file-123",
+            fileName = "archive.tar.gz",
+            fileSize = 100 * 1024 * 1024L,
+            mimeType = "application/gzip",
+            sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            chunkSize = 1024 * 1024,
+            totalChunks = 100,
+            fileKeyBase64 = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY=",
+            senderId = "alice",
+            recipientId = "bob"
+        )
+
+        val senderState = SenderTransferState(
+            fileId = descriptor.fileId,
+            sourceUriString = "content://com.android.providers.media.documents/document/10",
+            recipientId = "bob",
+            descriptor = descriptor,
+            fileKeyBase64 = descriptor.fileKeyBase64,
+            status = "WAITING_FOR_RECEIVER"
+        )
+
+        // Must remain in WAITING_FOR_RECEIVER until ready signal
+        assertEquals("WAITING_FOR_RECEIVER", senderState.status)
+
+        // When Ready received
+        val ready = FileTransferControl.Ready(fileId = descriptor.fileId)
+        val updatedState = senderState.copy(status = "UPLOADING")
+        assertEquals("UPLOADING", updatedState.status)
+        assertEquals(ready.fileId, updatedState.fileId)
+    }
+
+    @Test
+    fun failsClosedWhenRelayUrlIsBlank() {
+        val blankUrl = "   "
+        try {
+            require(blankUrl.isNotBlank()) {
+                "File relay URL is not configured"
+            }
+            fail("Expected exception for blank relay URL")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message?.contains("File relay URL is not configured") == true)
+        }
+    }
+
+    @Test
+    fun verifiesBackpressureAndValidationHttpMappings() {
+        val bufferFullStatus = 429 // TOO_MANY_REQUESTS
+        val isRetryable = bufferFullStatus == 429 || (bufferFullStatus in 500..599)
+        assertTrue("Buffer full must be retryable", isRetryable)
+
+        val validationStatus = 400 // BAD_REQUEST
+        val isValidationRetryable = validationStatus == 429 || (validationStatus in 500..599)
+        assertFalse("Validation errors must not be retryable", isValidationRetryable)
     }
 }

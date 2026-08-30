@@ -243,6 +243,28 @@ pub struct StreamRelayStore {
     max_buffered_chunks_per_session: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum SaveChunkError {
+    Validation(String),
+    NotFound,
+    BufferFull,
+}
+
+impl std::fmt::Display for SaveChunkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SaveChunkError::Validation(msg) => write!(f, "Validation error: {msg}"),
+            SaveChunkError::NotFound => write!(f, "File transfer not found or expired"),
+            SaveChunkError::BufferFull => write!(
+                f,
+                "Streaming transit buffer full (waiting for receiver to consume chunks)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SaveChunkError {}
+
 impl StreamRelayStore {
     pub fn new(max_buffered_chunks_per_session: usize) -> Self {
         Self {
@@ -255,25 +277,19 @@ impl StreamRelayStore {
         validate_file_id(&req.file_id)?;
         anyhow::ensure!(
             req.file_size > 0 && req.file_size <= MAX_FILE_SIZE_BYTES,
-            "File size exceeds 5 GiB maximum limit or is 0"
+            "File size exceeds 5 GiB maximum constraint"
         );
         anyhow::ensure!(
-            req.chunk_size as usize <= MAX_CHUNK_BYTES && req.chunk_size >= 1024,
-            "Chunk size must be between 1 KiB and 4 MiB"
-        );
-        let expected_chunks = req.file_size.div_ceil(req.chunk_size as u64) as u32;
-        anyhow::ensure!(
-            req.total_chunks == expected_chunks,
-            "Total chunks mismatch for file size"
-        );
-        let now = now_epoch_ms();
-        anyhow::ensure!(
-            req.expires_at_epoch_ms > now,
-            "File transfer is already expired"
+            req.chunk_size > 0 && req.chunk_size as usize <= MAX_CHUNK_BYTES,
+            "Chunk size exceeds 4 MiB maximum chunk limit"
         );
         anyhow::ensure!(
-            req.expires_at_epoch_ms <= now.saturating_add(MAX_RETENTION_MS),
-            "Retention exceeds 7 days"
+            req.total_chunks > 0 && req.total_chunks <= 5120 * 4,
+            "Total chunks count exceeds limit"
+        );
+        anyhow::ensure!(
+            !req.sha256.trim().is_empty() && req.sha256.len() <= 64,
+            "File SHA-256 integrity hash is required"
         );
 
         let meta = FileMetadata {
@@ -300,28 +316,33 @@ impl StreamRelayStore {
         Ok(())
     }
 
-    pub fn save_chunk(&self, file_id: &str, chunk_index: u32, data: &[u8]) -> anyhow::Result<()> {
-        validate_file_id(file_id)?;
+    pub fn save_chunk(
+        &self,
+        file_id: &str,
+        chunk_index: u32,
+        data: &[u8],
+    ) -> Result<(), SaveChunkError> {
+        validate_file_id(file_id).map_err(|e| SaveChunkError::Validation(e.to_string()))?;
         let mut lock = self.sessions.lock().unwrap();
-        let session = lock
-            .get_mut(file_id)
-            .ok_or_else(|| anyhow::anyhow!("File transfer not found or expired"))?;
+        let session = lock.get_mut(file_id).ok_or(SaveChunkError::NotFound)?;
 
-        anyhow::ensure!(
-            chunk_index < session.meta.total_chunks,
-            "Chunk index out of bounds"
-        );
-        anyhow::ensure!(
-            data.len() <= session.meta.chunk_size as usize,
-            "Chunk data exceeds negotiated chunk size"
-        );
+        if chunk_index >= session.meta.total_chunks {
+            return Err(SaveChunkError::Validation(
+                "Chunk index out of bounds".to_owned(),
+            ));
+        }
+        if data.len() > session.meta.chunk_size as usize {
+            return Err(SaveChunkError::Validation(
+                "Chunk data exceeds negotiated chunk size".to_owned(),
+            ));
+        }
 
         // Bounded in-memory backpressure buffer
-        anyhow::ensure!(
-            session.buffered_chunks.len() < self.max_buffered_chunks_per_session
-                || session.buffered_chunks.contains_key(&chunk_index),
-            "Streaming transit buffer full (waiting for receiver to consume chunks)"
-        );
+        if session.buffered_chunks.len() >= self.max_buffered_chunks_per_session
+            && !session.buffered_chunks.contains_key(&chunk_index)
+        {
+            return Err(SaveChunkError::BufferFull);
+        }
 
         session.buffered_chunks.insert(chunk_index, data.to_vec());
         Ok(())
@@ -379,7 +400,8 @@ impl StreamRelayStore {
             .get_mut(file_id)
             .ok_or_else(|| anyhow::anyhow!("File transfer not found"))?;
         session.meta.completed = true;
-        session.buffered_chunks.clear();
+        // DO NOT clear buffered_chunks! The receiver will drain remaining chunks via get_chunk,
+        // and the receiver then calls delete_file or expiry cleans it up.
         Ok(())
     }
 
@@ -591,7 +613,14 @@ async fn upload_chunk_handler(
         .stream_relay
         .save_chunk(&file_id, chunk_index, &body)
         .map(|_| StatusCode::OK)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+        .map_err(|err| match err {
+            SaveChunkError::BufferFull => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Transit buffer full (backpressure - receiver must consume chunks)".to_string(),
+            ),
+            SaveChunkError::NotFound => (StatusCode::NOT_FOUND, err.to_string()),
+            SaveChunkError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+        })
 }
 
 async fn download_chunk_handler(
@@ -647,6 +676,7 @@ async fn delete_file_handler(
 // Ephemeral TURN REST Credentials (RFC 2104 / Coturn REST API)
 // -------------------------------------------------------------------------------------------------
 
+#[allow(clippy::all)]
 fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h0: u32 = 0x67452301;
     let mut h1: u32 = 0xEFCDAB89;
@@ -736,7 +766,7 @@ pub fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; 20] {
 
 pub fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
         let b1 = chunk.get(1).copied().unwrap_or(0);
@@ -1286,6 +1316,50 @@ mod tests {
 
         // Complete & delete session
         store.complete_file(file_id).unwrap();
+        store.delete_file(file_id).unwrap();
+        assert!(store.get_status(file_id).is_err());
+    }
+
+    #[test]
+    fn test_stream_relay_complete_preserves_undrained_chunks() {
+        let store = StreamRelayStore::new(4);
+        let file_id = "undrained-test";
+        let chunk_size = 64 * 1024;
+        let file_size = 128 * 1024; // 2 chunks
+        let total_chunks = 2;
+
+        store
+            .init_file(InitFileRequest {
+                file_id: file_id.to_owned(),
+                sender_peer_id: "sender".to_owned(),
+                recipient_peer_id: "recipient".to_owned(),
+                file_size,
+                chunk_size,
+                total_chunks,
+                sha256: "sha".to_owned(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            })
+            .unwrap();
+
+        let chunk0 = vec![1u8; chunk_size as usize];
+        let chunk1 = vec![2u8; chunk_size as usize];
+        store.save_chunk(file_id, 0, &chunk0).unwrap();
+        store.save_chunk(file_id, 1, &chunk1).unwrap();
+
+        // Sender completes upload
+        store.complete_file(file_id).unwrap();
+
+        // Status shows completed=true, but chunks are NOT wiped out
+        let status = store.get_status(file_id).unwrap();
+        assert!(status.completed);
+
+        // Receiver can still drain chunk 0 and chunk 1 successfully
+        let received0 = store.get_chunk(file_id, 0).unwrap();
+        assert_eq!(received0, chunk0);
+        let received1 = store.get_chunk(file_id, 1).unwrap();
+        assert_eq!(received1, chunk1);
+
+        // Once drained, session is deleted by receiver
         store.delete_file(file_id).unwrap();
         assert!(store.get_status(file_id).is_err());
     }

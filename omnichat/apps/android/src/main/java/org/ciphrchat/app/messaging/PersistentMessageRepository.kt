@@ -35,6 +35,8 @@ import org.whispersystems.libsignal.SignalProtocolAddress
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.ciphrchat.app.BuildConfig
+import org.ciphrchat.app.files.FileTransferControl
+import org.ciphrchat.app.files.FileTransferProgress
 import org.ciphrchat.app.files.LargeFileTransferManager
 import org.ciphrchat.app.files.FileTransferDescriptor
 import java.io.File
@@ -199,7 +201,7 @@ class PersistentMessageRepository @Inject constructor(
                 val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
                 val localId = identity.current()?.publicId ?: "self"
 
-                val (descriptor, fileKey) = largeFileManager.prepareDescriptor(
+                val (descriptor, _) = largeFileManager.prepareDescriptor(
                     uri = uri,
                     fileName = fileName,
                     mimeType = mimeType,
@@ -207,17 +209,7 @@ class PersistentMessageRepository @Inject constructor(
                     recipientId = contact.contactId
                 ).getOrThrow()
 
-                val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL.ifBlank { "https://relay.ciphrchat.org" }
-
-                // Launch concurrent streaming chunk upload through the zero-retention transit relay
-                networkScope.launch {
-                    largeFileManager.uploadFile(
-                        relayBaseHttpUrl = relayHttpUrl,
-                        uri = uri,
-                        descriptor = descriptor,
-                        fileKey = fileKey
-                    )
-                }
+                // Sender waits for receiver READY signal before streaming chunks.
 
                 // Send Signal-encrypted message containing ONLY the descriptor metadata and per-file key
                 sendContent(
@@ -268,7 +260,18 @@ class PersistentMessageRepository @Inject constructor(
             ?: (if (!fileId.isNullOrBlank()) largeFileManager.findDescriptorByFileId(fileId) else null)
             ?: return@withContext null
 
-        val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL.ifBlank { "https://relay.ciphrchat.org" }
+        val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL
+        if (relayHttpUrl.isBlank()) {
+            largeFileManager.updateProgress(
+                FileTransferProgress.Failed(descriptor.fileId, "File relay URL is not configured")
+            )
+            return@withContext null
+        }
+
+        // Send resume request with missing chunks to sender
+        val missing = largeFileManager.getLocalMissingChunks(destinationFile, descriptor.totalChunks)
+        sendFileControlMessage(descriptor.senderId, FileTransferControl.Resume(descriptor.fileId, missing))
+
         largeFileManager.downloadFile(relayHttpUrl, descriptor, destinationFile).getOrNull()
     }
 
@@ -530,28 +533,47 @@ class PersistentMessageRepository @Inject constructor(
             }
         }
 
+        decoded.fileControl?.let { control ->
+            when (control) {
+                is FileTransferControl.Offer -> {
+                    handleIncomingFileOffer(
+                        messageId = messageId,
+                        senderId = senderId,
+                        ciphertext = ciphertext,
+                        createdAtEpochMs = createdAtEpochMs,
+                        transport = transport,
+                        fileDescriptor = control.descriptor
+                    )
+                    return
+                }
+                is FileTransferControl.Ready -> {
+                    handleIncomingFileReady(senderId, control.fileId, control.missingChunks)
+                    return
+                }
+                is FileTransferControl.Resume -> {
+                    handleIncomingFileResume(senderId, control.fileId, control.missingChunks)
+                    return
+                }
+                is FileTransferControl.Cancel -> {
+                    largeFileManager.cancel(control.fileId)
+                    return
+                }
+                is FileTransferControl.Complete -> {
+                    largeFileManager.updateSenderTransferStatus(control.fileId, "COMPLETED")
+                    return
+                }
+            }
+        }
+
         val fileDescriptor = decoded.fileDescriptor
         if (fileDescriptor != null) {
-            largeFileManager.registerDescriptor(fileDescriptor)
-            val localId = identity.current()?.publicId ?: "local"
-            dao.insertMessage(
-                MessageEntity(
-                    id = messageId,
-                    conversationId = senderId,
-                    senderId = senderId,
-                    recipientId = localId,
-                    body = contentCipher.encrypt("Large File: ${fileDescriptor.fileName} (${formatBytes(fileDescriptor.fileSize)})"),
-                    encryptedPayload = ciphertext,
-                    createdAtEpochMs = createdAtEpochMs,
-                    direction = MessageDirection.INCOMING,
-                    status = MessageStatus.DELIVERED,
-                    selectedTransport = transport,
-                    attachmentFileName = fileDescriptor.fileName,
-                    attachmentMimeType = fileDescriptor.mimeType,
-                    attachmentStoragePath = "large_file:${fileDescriptor.fileId}",
-                    attachmentSizeBytes = fileDescriptor.fileSize,
-                    attachmentSha256 = fileDescriptor.sha256
-                )
+            handleIncomingFileOffer(
+                messageId = messageId,
+                senderId = senderId,
+                ciphertext = ciphertext,
+                createdAtEpochMs = createdAtEpochMs,
+                transport = transport,
+                fileDescriptor = fileDescriptor
             )
             return
         }
@@ -581,6 +603,119 @@ class PersistentMessageRepository @Inject constructor(
                 attachmentSha256 = stored?.sha256
             )
         )
+    }
+
+    private suspend fun handleIncomingFileOffer(
+        messageId: String,
+        senderId: String,
+        ciphertext: ByteArray,
+        createdAtEpochMs: Long,
+        transport: String,
+        fileDescriptor: FileTransferDescriptor
+    ) {
+        largeFileManager.registerDescriptor(fileDescriptor)
+        val localId = identity.current()?.publicId ?: "local"
+        dao.insertMessage(
+            MessageEntity(
+                id = messageId,
+                conversationId = senderId,
+                senderId = senderId,
+                recipientId = localId,
+                body = contentCipher.encrypt("Large File: ${fileDescriptor.fileName} (${formatBytes(fileDescriptor.fileSize)})"),
+                encryptedPayload = ciphertext,
+                createdAtEpochMs = createdAtEpochMs,
+                direction = MessageDirection.INCOMING,
+                status = MessageStatus.DELIVERED,
+                selectedTransport = transport,
+                attachmentFileName = fileDescriptor.fileName,
+                attachmentMimeType = fileDescriptor.mimeType,
+                attachmentStoragePath = "large_file:${fileDescriptor.fileId}",
+                attachmentSizeBytes = fileDescriptor.fileSize,
+                attachmentSha256 = fileDescriptor.sha256
+            )
+        )
+
+        // 1. Send Signal-encrypted LARGE_FILE_READY to sender
+        sendFileControlMessage(senderId, FileTransferControl.Ready(fileDescriptor.fileId))
+
+        // 2. Start receiver download worker
+        val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL
+        if (relayHttpUrl.isNotBlank()) {
+            val downloadDir = File(context.filesDir, "CiphrChat/downloads").apply { mkdirs() }
+            val destinationFile = File(downloadDir, fileDescriptor.fileName)
+            networkScope.launch {
+                largeFileManager.downloadFile(relayHttpUrl, fileDescriptor, destinationFile)
+            }
+        } else {
+            largeFileManager.updateProgress(
+                FileTransferProgress.Failed(fileDescriptor.fileId, "File relay URL is not configured")
+            )
+        }
+    }
+
+    private suspend fun handleIncomingFileReady(
+        senderId: String,
+        fileId: String,
+        requestedChunks: List<Int>?
+    ) {
+        val senderState = largeFileManager.getSenderTransfer(fileId) ?: return
+        val relayHttpUrl = BuildConfig.CIPHRCHAT_FILE_RELAY_HTTP_URL
+        if (relayHttpUrl.isBlank()) {
+            largeFileManager.updateProgress(
+                FileTransferProgress.Failed(fileId, "File relay URL is not configured")
+            )
+            return
+        }
+
+        val uri = Uri.parse(senderState.sourceUriString)
+        val fileKey = Base64.decode(senderState.fileKeyBase64, Base64.NO_WRAP)
+        networkScope.launch {
+            largeFileManager.uploadFile(
+                relayBaseHttpUrl = relayHttpUrl,
+                uri = uri,
+                descriptor = senderState.descriptor,
+                fileKey = fileKey,
+                missingChunkIndexes = requestedChunks?.toSet()
+            )
+        }
+    }
+
+    private suspend fun handleIncomingFileResume(
+        senderId: String,
+        fileId: String,
+        missingChunks: List<Int>
+    ) {
+        handleIncomingFileReady(senderId, fileId, missingChunks)
+    }
+
+    private suspend fun sendFileControlMessage(
+        recipientId: String,
+        control: FileTransferControl
+    ) {
+        runCatching {
+            val contact = contacts.find(recipientId) ?: return
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            if (!sessions.hasSession(address)) {
+                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+            }
+            val payload = MessageContentCodec.encodeFileControl(control)
+            val ciphertext = sessions.encryptMessage(address, payload)
+            val localId = identity.current()?.publicId ?: "self"
+            val messageId = UUID.randomUUID().toString()
+            val envelope = OutboundEnvelope(
+                messageId = messageId,
+                senderId = localId,
+                recipientId = contact.contactId,
+                encryptedPayload = ciphertext.serialize(),
+                createdAtEpochMs = System.currentTimeMillis(),
+                expiresAtEpochMs = System.currentTimeMillis() + 60_000L,
+                protocolVersion = 2,
+                hopLimit = 8,
+                testOnly = false,
+                senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+            )
+            router.route(envelope)
+        }
     }
 
     private fun getUriFileSize(uri: Uri): Long {

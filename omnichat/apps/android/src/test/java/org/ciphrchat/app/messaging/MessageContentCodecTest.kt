@@ -1,8 +1,10 @@
 package org.ciphrchat.app.messaging
 
+import org.ciphrchat.app.files.FileTransferControl
 import org.ciphrchat.app.files.FileTransferDescriptor
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MessageContentCodecTest {
@@ -53,6 +55,42 @@ class MessageContentCodecTest {
         val decoded = MessageContentCodec.decode(encoded)
 
         assertEquals(descriptor, decoded.fileDescriptor)
+        assertTrue(decoded.fileControl is FileTransferControl.Offer)
+    }
+
+    @Test
+    fun fileTransferControlReadyRoundTrips() {
+        val control = FileTransferControl.Ready(
+            fileId = "file-uuid-12345",
+            missingChunks = listOf(0, 1, 2)
+        )
+        val encoded = MessageContentCodec.encodeFileControl(control)
+        val decoded = MessageContentCodec.decode(encoded)
+
+        assertEquals(control, decoded.fileControl)
+    }
+
+    @Test
+    fun fileTransferControlResumeRoundTrips() {
+        val control = FileTransferControl.Resume(
+            fileId = "file-uuid-12345",
+            missingChunks = listOf(4, 7, 12)
+        )
+        val encoded = MessageContentCodec.encodeFileControl(control)
+        val decoded = MessageContentCodec.decode(encoded)
+
+        assertEquals(control, decoded.fileControl)
+    }
+
+    @Test
+    fun fileTransferControlCancelAndCompleteRoundTrip() {
+        val cancel = FileTransferControl.Cancel(fileId = "file-uuid-12345")
+        val decodedCancel = MessageContentCodec.decode(MessageContentCodec.encodeFileControl(cancel))
+        assertEquals(cancel, decodedCancel.fileControl)
+
+        val complete = FileTransferControl.Complete(fileId = "file-uuid-12345")
+        val decodedComplete = MessageContentCodec.decode(MessageContentCodec.encodeFileControl(complete))
+        assertEquals(complete, decodedComplete.fileControl)
     }
 
     @Test

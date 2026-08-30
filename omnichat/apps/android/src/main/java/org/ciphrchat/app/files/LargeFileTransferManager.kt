@@ -38,6 +38,11 @@ class LargeFileTransferManager @Inject constructor(
 
     private val descriptorsBySha256 = ConcurrentHashMap<String, FileTransferDescriptor>()
     private val descriptorsByFileId = ConcurrentHashMap<String, FileTransferDescriptor>()
+    private val senderTransfersByFileId = ConcurrentHashMap<String, SenderTransferState>()
+
+    init {
+        loadPersistedSenderTransfers()
+    }
 
     fun registerDescriptor(descriptor: FileTransferDescriptor) {
         descriptorsBySha256[descriptor.sha256] = descriptor
@@ -53,6 +58,24 @@ class LargeFileTransferManager @Inject constructor(
     fun findDescriptorByFileId(fileId: String): FileTransferDescriptor? {
         descriptorsByFileId[fileId]?.let { return it }
         return loadDescriptorFromDiskByFileId(fileId)
+    }
+
+    fun saveSenderTransfer(state: SenderTransferState) {
+        senderTransfersByFileId[state.fileId] = state
+        registerDescriptor(state.descriptor)
+        saveSenderTransferToDisk(state)
+    }
+
+    fun getSenderTransfer(fileId: String): SenderTransferState? {
+        senderTransfersByFileId[fileId]?.let { return it }
+        return loadSenderTransferFromDisk(fileId)
+    }
+
+    fun updateSenderTransferStatus(fileId: String, status: String) {
+        getSenderTransfer(fileId)?.let { existing ->
+            val updated = existing.copy(status = status)
+            saveSenderTransfer(updated)
+        }
     }
 
     /**
@@ -91,6 +114,24 @@ class LargeFileTransferManager @Inject constructor(
                 recipientId = recipientId
             )
             registerDescriptor(descriptor)
+
+            val senderState = SenderTransferState(
+                fileId = fileId,
+                sourceUriString = uri.toString(),
+                recipientId = recipientId,
+                descriptor = descriptor,
+                fileKeyBase64 = descriptor.fileKeyBase64,
+                status = "WAITING_FOR_RECEIVER"
+            )
+            saveSenderTransfer(senderState)
+            updateProgress(
+                FileTransferProgress.WaitingForReceiver(
+                    fileId = fileId,
+                    fileName = fileName,
+                    totalBytes = fileSize
+                )
+            )
+
             Pair(descriptor, fileKey)
         }
     }
@@ -106,15 +147,18 @@ class LargeFileTransferManager @Inject constructor(
         missingChunkIndexes: Set<Int>? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            require(relayBaseHttpUrl.isNotBlank()) {
+                "File relay URL is not configured"
+            }
             val fileId = descriptor.fileId
             activeTransfers[fileId] = true
-            registerDescriptor(descriptor)
+            updateSenderTransferStatus(fileId, "UPLOADING")
 
             // 1. Initialize transient stream session on relay
             initFileOnRelay(relayBaseHttpUrl, descriptor)
 
             val chunksToSend = missingChunkIndexes ?: (0 until descriptor.totalChunks).toSet()
-            var bytesReadTotal = 0L
+            var bytesTransferredTotal = 0L
 
             for (chunkIndex in 0 until descriptor.totalChunks) {
                 if (activeTransfers[fileId] != true) {
@@ -128,21 +172,21 @@ class LargeFileTransferManager @Inject constructor(
                 }
 
                 if (!chunksToSend.contains(chunkIndex)) {
-                    bytesReadTotal += expectedBytes
+                    bytesTransferredTotal += expectedBytes
                     continue
                 }
 
-                // Read chunk directly from local source file
+                // Read chunk directly from original local source file
                 val plaintextChunk = readChunkFromUri(uri, chunkIndex.toLong() * descriptor.chunkSize, expectedBytes)
                 val encryptedChunk = FileChunkCipher.encryptChunk(fileKey, fileId, chunkIndex, plaintextChunk)
 
                 uploadChunkToRelay(relayBaseHttpUrl, fileId, chunkIndex, encryptedChunk)
 
-                bytesReadTotal += plaintextChunk.size
+                bytesTransferredTotal += plaintextChunk.size
                 updateProgress(
                     FileTransferProgress.Uploading(
                         fileId = fileId,
-                        uploadedBytes = bytesReadTotal,
+                        uploadedBytes = bytesTransferredTotal,
                         totalBytes = descriptor.fileSize,
                         currentChunk = chunkIndex + 1,
                         totalChunks = descriptor.totalChunks
@@ -152,7 +196,14 @@ class LargeFileTransferManager @Inject constructor(
 
             // 2. Mark transit session complete on relay
             completeFileOnRelay(relayBaseHttpUrl, fileId)
+            updateSenderTransferStatus(fileId, "COMPLETED")
             updateProgress(FileTransferProgress.Completed(fileId, uri.toString(), descriptor.fileSize))
+        }.onFailure { err ->
+            if (err is CancellationException) {
+                updateProgress(FileTransferProgress.Cancelled(descriptor.fileId))
+            } else {
+                updateProgress(FileTransferProgress.Failed(descriptor.fileId, err.message ?: "Upload failed"))
+            }
         }.also {
             activeTransfers.remove(descriptor.fileId)
         }
@@ -168,6 +219,9 @@ class LargeFileTransferManager @Inject constructor(
         destinationFile: File
     ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
+            require(relayBaseHttpUrl.isNotBlank()) {
+                "File relay URL is not configured"
+            }
             val fileId = descriptor.fileId
             activeTransfers[fileId] = true
             registerDescriptor(descriptor)
@@ -235,6 +289,12 @@ class LargeFileTransferManager @Inject constructor(
             } else {
                 error("Failed to finalize downloaded file")
             }
+        }.onFailure { err ->
+            if (err is CancellationException) {
+                updateProgress(FileTransferProgress.Cancelled(descriptor.fileId))
+            } else {
+                updateProgress(FileTransferProgress.Failed(descriptor.fileId, err.message ?: "Download failed"))
+            }
         }.also {
             activeTransfers.remove(descriptor.fileId)
         }
@@ -243,6 +303,29 @@ class LargeFileTransferManager @Inject constructor(
     fun cancel(fileId: String) {
         activeTransfers[fileId] = false
         updateProgress(FileTransferProgress.Cancelled(fileId))
+    }
+
+    fun pause(fileId: String) {
+        activeTransfers[fileId] = false
+        val currentProg = _progress.value[fileId]
+        val transferred = when (currentProg) {
+            is FileTransferProgress.Uploading -> currentProg.uploadedBytes
+            is FileTransferProgress.Downloading -> currentProg.downloadedBytes
+            else -> 0L
+        }
+        val total = when (currentProg) {
+            is FileTransferProgress.Uploading -> currentProg.totalBytes
+            is FileTransferProgress.Downloading -> currentProg.totalBytes
+            is FileTransferProgress.WaitingForReceiver -> currentProg.totalBytes
+            else -> 0L
+        }
+        updateProgress(FileTransferProgress.Paused(fileId, transferred, total))
+    }
+
+    fun getLocalMissingChunks(destinationFile: File, totalChunks: Int): List<Int> {
+        val metaFile = File(destinationFile.parentFile, ".${destinationFile.name}.part_meta")
+        val received = loadLocalReceivedChunks(metaFile)
+        return (0 until totalChunks).filter { !received.contains(it) }
     }
 
     private fun loadLocalReceivedChunks(metaFile: File): MutableSet<Int> {
@@ -278,18 +361,12 @@ class LargeFileTransferManager @Inject constructor(
             val buf = ByteArray(length)
             val read = readExact(stream, buf, length)
             return buf.copyOfRange(0, read)
-        } ?: error("Could not open source file URI")
+        } ?: error("Original source file is no longer accessible; please select the file again.")
     }
 
-    private fun updateProgress(progressItem: FileTransferProgress) {
+    fun updateProgress(progressItem: FileTransferProgress) {
         val current = _progress.value.toMutableMap()
-        when (progressItem) {
-            is FileTransferProgress.Uploading -> current[progressItem.fileId] = progressItem
-            is FileTransferProgress.Downloading -> current[progressItem.fileId] = progressItem
-            is FileTransferProgress.Completed -> current[progressItem.fileId] = progressItem
-            is FileTransferProgress.Failed -> current[progressItem.fileId] = progressItem
-            is FileTransferProgress.Cancelled -> current[progressItem.fileId] = progressItem
-        }
+        current[progressItem.fileId] = progressItem
         _progress.value = current
     }
 
@@ -356,8 +433,8 @@ class LargeFileTransferManager @Inject constructor(
 
     private fun uploadChunkToRelay(relayUrl: String, fileId: String, chunkIndex: Int, chunkData: ByteArray) {
         var attempts = 0
-        val maxAttempts = 6
-        while (attempts < maxAttempts) {
+        val maxAttempts = 120 // Support up to several minutes of receiver backpressure
+        while (attempts < maxAttempts && activeTransfers[fileId] == true) {
             attempts++
             val url = URL("$relayUrl/files/upload/$fileId/$chunkIndex")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -374,23 +451,25 @@ class LargeFileTransferManager @Inject constructor(
                 if (code in 200..299) {
                     return
                 } else if (code == 429 || code in 500..599) {
-                    Thread.sleep((attempts * 250L).coerceAtMost(2000L))
+                    // Backpressure: receiver has not consumed buffered chunks yet; wait with exponential backoff
+                    Thread.sleep((attempts * 250L).coerceAtMost(3000L))
                     continue
                 } else {
                     error("Failed to upload chunk $chunkIndex: HTTP $code")
                 }
             } catch (e: Exception) {
-                if (attempts >= maxAttempts) throw e
-                Thread.sleep((attempts * 250L).coerceAtMost(2000L))
+                if (attempts >= maxAttempts || activeTransfers[fileId] != true) throw e
+                Thread.sleep((attempts * 250L).coerceAtMost(3000L))
             }
         }
+        if (activeTransfers[fileId] != true) throw CancellationException("Upload cancelled")
         error("Exceeded maximum retries uploading chunk $chunkIndex")
     }
 
     private fun downloadChunkFromRelay(relayUrl: String, fileId: String, chunkIndex: Int): ByteArray {
         var attempts = 0
-        val maxAttempts = 20
-        while (attempts < maxAttempts) {
+        val maxAttempts = 120 // Support receiver waiting for sender live stream
+        while (attempts < maxAttempts && activeTransfers[fileId] == true) {
             attempts++
             val url = URL("$relayUrl/files/download/$fileId/$chunkIndex")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -403,16 +482,18 @@ class LargeFileTransferManager @Inject constructor(
                 if (code == 200) {
                     return conn.inputStream.use { it.readBytes() }
                 } else if (code == 404 || code == 429 || code in 500..599) {
-                    Thread.sleep((attempts * 200L).coerceAtMost(1500L))
+                    // Chunk not yet buffered by sender into transit relay: wait for live concurrent streaming
+                    Thread.sleep((attempts * 200L).coerceAtMost(2000L))
                     continue
                 } else {
                     error("Failed to download chunk $chunkIndex: HTTP $code")
                 }
             } catch (e: Exception) {
-                if (attempts >= maxAttempts) throw e
-                Thread.sleep((attempts * 200L).coerceAtMost(1500L))
+                if (attempts >= maxAttempts || activeTransfers[fileId] != true) throw e
+                Thread.sleep((attempts * 200L).coerceAtMost(2000L))
             }
         }
+        if (activeTransfers[fileId] != true) throw CancellationException("Download cancelled")
         error("Exceeded maximum retries downloading chunk $chunkIndex")
     }
 
@@ -476,6 +557,68 @@ class LargeFileTransferManager @Inject constructor(
         }
         null
     }.getOrNull()
+
+    private fun saveSenderTransferToDisk(state: SenderTransferState) {
+        runCatching {
+            val dir = File(context.filesDir, "CiphrChat/sender_transfers").apply { mkdirs() }
+            val file = File(dir, "${state.fileId}.json")
+            val json = JSONObject()
+                .put("fileId", state.fileId)
+                .put("sourceUriString", state.sourceUriString)
+                .put("recipientId", state.recipientId)
+                .put("fileKeyBase64", state.fileKeyBase64)
+                .put("status", state.status)
+                .put("createdAtEpochMs", state.createdAtEpochMs)
+                .put("descriptor", JSONObject()
+                    .put("fileId", state.descriptor.fileId)
+                    .put("fileName", state.descriptor.fileName)
+                    .put("fileSize", state.descriptor.fileSize)
+                    .put("mimeType", state.descriptor.mimeType)
+                    .put("sha256", state.descriptor.sha256)
+                    .put("chunkSize", state.descriptor.chunkSize)
+                    .put("totalChunks", state.descriptor.totalChunks)
+                    .put("fileKeyBase64", state.descriptor.fileKeyBase64)
+                    .put("senderId", state.descriptor.senderId)
+                    .put("recipientId", state.descriptor.recipientId)
+                    .put("createdAtEpochMs", state.descriptor.createdAtEpochMs)
+                )
+            file.writeText(json.toString())
+        }
+    }
+
+    private fun loadSenderTransferFromDisk(fileId: String): SenderTransferState? = runCatching {
+        val file = File(context.filesDir, "CiphrChat/sender_transfers/$fileId.json")
+        if (!file.exists()) return null
+        parseSenderTransferJson(JSONObject(file.readText()))
+    }.getOrNull()
+
+    private fun loadPersistedSenderTransfers() {
+        runCatching {
+            val dir = File(context.filesDir, "CiphrChat/sender_transfers")
+            if (!dir.exists()) return
+            dir.listFiles()?.forEach { file ->
+                val state = runCatching { parseSenderTransferJson(JSONObject(file.readText())) }.getOrNull()
+                if (state != null) {
+                    senderTransfersByFileId[state.fileId] = state
+                    registerDescriptor(state.descriptor)
+                }
+            }
+        }
+    }
+
+    private fun parseSenderTransferJson(json: JSONObject): SenderTransferState {
+        val descJson = json.getJSONObject("descriptor")
+        val descriptor = parseDescriptorJson(descJson)
+        return SenderTransferState(
+            fileId = json.getString("fileId"),
+            sourceUriString = json.getString("sourceUriString"),
+            recipientId = json.getString("recipientId"),
+            descriptor = descriptor,
+            fileKeyBase64 = json.getString("fileKeyBase64"),
+            status = json.optString("status", "WAITING_FOR_RECEIVER"),
+            createdAtEpochMs = json.optLong("createdAtEpochMs", System.currentTimeMillis())
+        )
+    }
 
     private fun parseDescriptorJson(json: JSONObject): FileTransferDescriptor {
         return FileTransferDescriptor(

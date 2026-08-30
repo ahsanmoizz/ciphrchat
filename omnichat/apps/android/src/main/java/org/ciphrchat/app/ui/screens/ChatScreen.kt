@@ -42,6 +42,7 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val resolvedContactName by viewModel.contactName.collectAsState()
+    val transferProgressMap by viewModel.fileTransferProgress.collectAsState()
     val notice by viewModel.notice.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
@@ -201,6 +202,9 @@ fun ChatScreen(
                     }
                 } else null
 
+                val fileId = message.attachmentStoragePath?.removePrefix("large_file:")
+                val progress = if (fileId != null) transferProgressMap[fileId] else null
+
                 CiphrMessageBubble(
                     text = message.body,
                     time = timeStr,
@@ -210,6 +214,8 @@ fun ChatScreen(
                     attachmentFileName = message.attachmentFileName,
                     attachmentMimeType = message.attachmentMimeType,
                     attachmentSizeBytes = message.attachmentSizeBytes,
+                    attachmentStoragePath = message.attachmentStoragePath,
+                    transferProgress = progress,
                     onOpenAttachment = if (message.attachmentFileName != null) {
                         {
                             viewModel.materializeAttachment(message) { result ->
@@ -224,7 +230,10 @@ fun ChatScreen(
                                 }
                             }
                         }
-                    } else null
+                    } else null,
+                    onCancelTransfer = if (fileId != null) { { viewModel.cancelLargeFile(fileId) } } else null,
+                    onResumeTransfer = if (fileId != null) { { viewModel.materializeAttachment(message) {} } } else null,
+                    onRetryTransfer = if (fileId != null) { { viewModel.materializeAttachment(message) {} } } else null
                 )
             }
         }
