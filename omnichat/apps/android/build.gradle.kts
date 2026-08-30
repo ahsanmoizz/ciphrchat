@@ -103,6 +103,10 @@ android {
         }
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -157,6 +161,7 @@ dependencies {
     implementation("io.getstream:stream-webrtc-android:1.3.9")
 
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
 
     ksp(libs.hilt.compiler)
     ksp(libs.room.compiler)

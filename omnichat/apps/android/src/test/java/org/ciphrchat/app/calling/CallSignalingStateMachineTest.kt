@@ -2,7 +2,6 @@ package org.ciphrchat.app.calling
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CallSignalingStateMachineTest {
@@ -36,6 +35,7 @@ class CallSignalingStateMachineTest {
         val parsedAnswer = CallSignal.fromJson(answer.toJson()) as? CallSignal.Answer
         assertNotNull(parsedAnswer)
         assertEquals("call-5678", parsedAnswer?.callId)
+        assertEquals("sender-peer", parsedAnswer?.recipientId)
 
         val hangup = CallSignal.Hangup(
             callId = "call-5678",
@@ -46,6 +46,7 @@ class CallSignalingStateMachineTest {
         val parsedHangup = CallSignal.fromJson(hangup.toJson()) as? CallSignal.Hangup
         assertNotNull(parsedHangup)
         assertEquals(125L, parsedHangup?.durationSeconds)
+        assertEquals("sender-peer", parsedHangup?.recipientId)
     }
 
     @Test
@@ -59,6 +60,7 @@ class CallSignalingStateMachineTest {
         val parsedReject = CallSignal.fromJson(reject.toJson()) as? CallSignal.Reject
         assertNotNull(parsedReject)
         assertEquals("Decline", parsedReject?.reason)
+        assertEquals("sender-peer", parsedReject?.recipientId)
 
         val ringing = CallSignal.Ringing(
             callId = "call-9999",
@@ -68,5 +70,24 @@ class CallSignalingStateMachineTest {
         val parsedRinging = CallSignal.fromJson(ringing.toJson()) as? CallSignal.Ringing
         assertNotNull(parsedRinging)
         assertEquals("call-9999", parsedRinging?.callId)
+        assertEquals("sender-peer", parsedRinging?.recipientId)
+    }
+
+    @Test
+    fun handlesIceCandidateSignal() {
+        val ice = CallSignal.IceCandidate(
+            callId = "call-ice-1",
+            recipientId = "recipient-peer",
+            sdpMid = "audio",
+            sdpMLineIndex = 0,
+            sdpCandidate = "candidate:1 1 UDP 2122252543 192.168.1.100 50000 typ relay"
+        )
+        val parsedIce = CallSignal.fromJson(ice.toJson()) as? CallSignal.IceCandidate
+        assertNotNull(parsedIce)
+        assertEquals("call-ice-1", parsedIce?.callId)
+        assertEquals("recipient-peer", parsedIce?.recipientId)
+        assertEquals("audio", parsedIce?.sdpMid)
+        assertEquals(0, parsedIce?.sdpMLineIndex)
+        assertEquals("candidate:1 1 UDP 2122252543 192.168.1.100 50000 typ relay", parsedIce?.sdpCandidate)
     }
 }

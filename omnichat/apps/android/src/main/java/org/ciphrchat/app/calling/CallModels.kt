@@ -121,12 +121,12 @@ sealed class CallSignal(val type: String) {
             val callId = json.getString("callId")
             val recipientId = json.optString("recipientId", "")
             when (type) {
-                "OFFER" -> Offer(callId, json.getString("sdp"), json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("timestamp"))
-                "ANSWER" -> Answer(callId, json.getString("sdp"), json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("timestamp"))
+                "OFFER" -> Offer(callId, json.getString("sdp"), json.getString("senderId"), recipientId, json.optLong("timestamp", System.currentTimeMillis()))
+                "ANSWER" -> Answer(callId, json.getString("sdp"), json.getString("senderId"), recipientId, json.optLong("timestamp", System.currentTimeMillis()))
                 "ICE_CANDIDATE" -> IceCandidate(callId, recipientId, json.getString("sdpMid"), json.getInt("sdpMLineIndex"), json.getString("sdpCandidate"))
-                "RINGING" -> Ringing(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") })
-                "REJECT" -> Reject(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optString("reason", "Decline"))
-                "HANGUP" -> Hangup(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("durationSeconds", 0L))
+                "RINGING" -> Ringing(callId, json.getString("senderId"), recipientId)
+                "REJECT" -> Reject(callId, json.getString("senderId"), recipientId, json.optString("reason", "Decline"))
+                "HANGUP" -> Hangup(callId, json.getString("senderId"), recipientId, json.optLong("durationSeconds", 0L))
                 else -> null
             }
         }.getOrNull()
