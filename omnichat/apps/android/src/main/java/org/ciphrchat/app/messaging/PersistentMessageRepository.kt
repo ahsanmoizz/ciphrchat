@@ -27,6 +27,8 @@ import org.ciphrchat.app.transport.OutboundEnvelope
 import org.ciphrchat.app.transport.SendResult
 import org.ciphrchat.app.transport.TransportInboundBus
 import org.ciphrchat.app.identity.IdentityRepository
+import org.ciphrchat.app.calling.AudioCallManager
+import org.ciphrchat.app.calling.CallSignal
 import org.ciphrchat.app.identity.InvitationService
 import org.ciphrchat.app.identity.ReciprocalPairingPolicy
 import org.whispersystems.libsignal.SignalProtocolAddress
@@ -46,7 +48,8 @@ class PersistentMessageRepository @Inject constructor(
     private val identity: IdentityRepository,
     private val attachmentStore: AttachmentStore,
     private val invitationService: InvitationService,
-    private val retryScheduler: PendingMessageRetryScheduler
+    private val retryScheduler: PendingMessageRetryScheduler,
+    private val audioCallManager: AudioCallManager
 ) : MessageRepository {
 
     private val dao = database.messageDao()
@@ -74,6 +77,35 @@ class PersistentMessageRepository @Inject constructor(
         }
         networkScope.launch {
             inboundBus.events.collect { event -> receiveLocal(event.envelope, event.transport) }
+        }
+        networkScope.launch {
+            audioCallManager.outgoingSignals.collect { signal ->
+                runCatching {
+                    val contact = contacts.find(signal.recipientId) ?: return@collect
+                    val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+                    if (!sessions.hasSession(address)) {
+                        sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+                    }
+                    val signalJson = signal.toJson()
+                    val payload = MessageContentCodec.encodeCallSignal(signalJson)
+                    val localId = identity.current()?.publicId ?: "self"
+                    val messageId = UUID.randomUUID().toString()
+                    val ciphertext = sessions.encryptMessage(address, payload)
+                    val envelope = OutboundEnvelope(
+                        messageId = messageId,
+                        senderId = localId,
+                        recipientId = contact.contactId,
+                        encryptedPayload = ciphertext,
+                        createdAtEpochMs = System.currentTimeMillis(),
+                        expiresAtEpochMs = System.currentTimeMillis() + 60_000L,
+                        protocolVersion = 1,
+                        hopLimit = 8,
+                        testOnly = false,
+                        senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+                    )
+                    router.route(envelope)
+                }
+            }
         }
     }
 
@@ -396,6 +428,23 @@ class PersistentMessageRepository @Inject constructor(
         transport: String
     ) {
         val decoded = MessageContentCodec.decode(plaintext)
+
+        decoded.callSignalJson?.let { signalJson ->
+            val signal = CallSignal.fromJson(signalJson)
+            if (signal != null) {
+                val contactName = contacts.find(senderId)?.displayName ?: "Contact ${senderId.takeLast(6)}"
+                when (signal) {
+                    is CallSignal.Offer -> audioCallManager.onIncomingOffer(signal, contactName)
+                    is CallSignal.Answer -> audioCallManager.onCallAnswer(signal)
+                    is CallSignal.IceCandidate -> audioCallManager.onRemoteIceCandidate(signal)
+                    is CallSignal.Reject -> audioCallManager.onCallReject(signal)
+                    is CallSignal.Hangup -> audioCallManager.onCallHangup(signal)
+                    is CallSignal.Ringing -> {}
+                }
+                return
+            }
+        }
+
         val attachment = decoded.attachment
         val stored = attachment?.let {
             require(it.bytes.size <= AttachmentStore.MAX_ATTACHMENT_BYTES) { "Attachment exceeds the supported size" }

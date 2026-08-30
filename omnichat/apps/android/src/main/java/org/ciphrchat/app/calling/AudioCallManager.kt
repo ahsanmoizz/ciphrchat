@@ -1,9 +1,7 @@
 package org.ciphrchat.app.calling
 
 import android.content.Context
-import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,15 +14,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import org.ciphrchat.app.privacy.IpPrivacyPolicy
+import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.privacy.PrivacyManager
+import org.webrtc.*
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages audio-only WebRTC calls with Opus codec, weak-network resilience (DTX/FEC),
- * self-hosted Coturn TURN/STUN infrastructure, and relay-only ICE privacy mode.
+ * Manages real audio-only WebRTC calls with Opus codec, weak-network resilience (DTX/FEC),
+ * dynamic Coturn TURN/STUN configuration, and relay-only ICE privacy mode.
  */
 @Singleton
 class AudioCallManager @Inject constructor(
@@ -43,57 +42,153 @@ class AudioCallManager @Inject constructor(
     private var timeoutJob: Job? = null
     private var callDurationJob: Job? = null
     private var currentCallId: String? = null
+    private var currentContactId: String? = null
+    private var currentContactName: String? = null
+    private var currentLocalId: String = "self"
 
-    // Audio constraints
-    val audioConstraints = AudioConstraints(
-        audioOnly = true,
-        videoEnabled = false, // Strictly NO video track creation
-        codec = "Opus",
-        channels = 1, // Mono audio
-        sampleRate = 48000,
-        dtxEnabled = true, // Discontinuous transmission for weak networks
-        fecEnabled = true, // Forward error correction for packet loss
-        echoCancellation = true,
-        noiseSuppression = true,
-        autoGainControl = true
-    )
+    // Real WebRTC objects
+    private var peerConnectionFactory: PeerConnectionFactory? = null
+    private var peerConnection: PeerConnection? = null
+    private var audioSource: AudioSource? = null
+    private var localAudioTrack: AudioTrack? = null
 
-    data class AudioConstraints(
-        val audioOnly: Boolean,
-        val videoEnabled: Boolean,
-        val codec: String,
-        val channels: Int,
-        val sampleRate: Int,
-        val dtxEnabled: Boolean,
-        val fecEnabled: Boolean,
-        val echoCancellation: Boolean,
-        val noiseSuppression: Boolean,
-        val autoGainControl: Boolean
-    )
+    init {
+        initializeWebRtc()
+    }
 
-    data class IceServerConfig(
-        val uri: String,
-        val username: String? = null,
-        val credential: String? = null
-    )
+    private fun initializeWebRtc() {
+        runCatching {
+            val initOptions = PeerConnectionFactory.InitializationOptions.builder(context)
+                .setEnableInternalTracer(false)
+                .createInitializationOptions()
+            PeerConnectionFactory.initialize(initOptions)
+
+            val options = PeerConnectionFactory.Options()
+            peerConnectionFactory = PeerConnectionFactory.builder()
+                .setOptions(options)
+                .createPeerConnectionFactory()
+        }
+    }
 
     /**
-     * Returns ICE servers for WebRTC. In production, uses self-hosted VPS coturn.
+     * Builds list of ICE servers dynamically from BuildConfig / deployment environment.
      */
-    fun getIceServers(): List<IceServerConfig> {
-        return listOf(
-            IceServerConfig(uri = "stun:127.0.0.1:3478"),
-            IceServerConfig(
-                uri = "turn:127.0.0.1:3478?transport=udp",
-                username = "ciphrchat",
-                credential = "ciphrchat_turn_secret"
-            ),
-            IceServerConfig(
-                uri = "turn:127.0.0.1:3478?transport=tcp",
-                username = "ciphrchat",
-                credential = "ciphrchat_turn_secret"
-            )
-        )
+    fun getIceServers(): List<PeerConnection.IceServer> {
+        val servers = mutableListOf<PeerConnection.IceServer>()
+        val turnUrl = BuildConfig.CIPHRCHAT_TURN_URL
+        val username = BuildConfig.CIPHRCHAT_TURN_USERNAME
+        val credential = BuildConfig.CIPHRCHAT_TURN_CREDENTIAL
+
+        if (turnUrl.isNotBlank()) {
+            val builder = PeerConnection.IceServer.builder(turnUrl)
+            if (username.isNotBlank()) builder.setUsername(username)
+            if (credential.isNotBlank()) builder.setPassword(credential)
+            servers.add(builder.createIceServer())
+        }
+
+        // Standard fallback STUN servers if TURN URL is not explicitly configured
+        if (servers.isEmpty()) {
+            servers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
+        }
+        return servers
+    }
+
+    /**
+     * Creates and configures real PeerConnection with audio track and ICE constraints.
+     */
+    private fun createPeerConnection(callId: String): PeerConnection? {
+        val factory = peerConnectionFactory ?: return null
+        val iceServers = getIceServers()
+        val isPrivacyOn = privacyManager.isIpPrivacyEnabled.value
+
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            if (isPrivacyOn) {
+                // Force TURN relay only to hide peer IP addresses
+                iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            } else {
+                iceTransportsType = PeerConnection.IceTransportsType.ALL
+            }
+        }
+
+        val observer = object : PeerConnection.Observer {
+            override fun onIceCandidate(candidate: IceCandidate?) {
+                if (candidate == null) return
+                val isPrivacyActive = privacyManager.isIpPrivacyEnabled.value
+                // When IP Privacy is ON, strip host/srflx candidates
+                if (isPrivacyActive && !candidate.sdp.contains("typ relay")) {
+                    return
+                }
+                val signal = CallSignal.IceCandidate(
+                    callId = callId,
+                    sdpMid = candidate.sdpMid ?: "",
+                    sdpMLineIndex = candidate.sdpMLineIndex,
+                    sdpCandidate = candidate.sdp
+                )
+                _outgoingSignals.tryEmit(signal)
+            }
+
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
+                scope.launch {
+                    when (newState) {
+                        PeerConnection.IceConnectionState.CONNECTED,
+                        PeerConnection.IceConnectionState.COMPLETED -> {
+                            val contactId = currentContactId ?: ""
+                            val contactName = currentContactName ?: ""
+                            timeoutJob?.cancel()
+                            transitionToConnected(callId, contactId, contactName)
+                        }
+                        PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            if (_callState.value is CallState.Connected) {
+                                val current = _callState.value as CallState.Connected
+                                _callState.value = CallState.Reconnecting(current.callId, current.contactId, current.contactName)
+                            }
+                        }
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            endCall("Connection failed")
+                        }
+                        PeerConnection.IceConnectionState.CLOSED -> {
+                            cleanupCallResources()
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+            override fun onAddStream(stream: MediaStream?) {}
+            override fun onRemoveStream(stream: MediaStream?) {}
+            override fun onDataChannel(channel: DataChannel?) {}
+            override fun onRenegotiationNeeded() {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+        }
+
+        val pc = factory.createPeerConnection(rtcConfig, observer) ?: return null
+
+        // Create local audio source and audio track (strictly NO video)
+        val audioConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            optional.add(MediaConstraints.KeyValuePair("echoCancellation", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
+        }
+
+        val src = factory.createAudioSource(audioConstraints)
+        audioSource = src
+        val track = factory.createAudioTrack("ARDAMSa0", src)
+        track.setEnabled(true)
+        localAudioTrack = track
+
+        pc.addTrack(track, listOf("ARDAMS"))
+        peerConnection = pc
+        return pc
     }
 
     /**
@@ -102,13 +197,47 @@ class AudioCallManager @Inject constructor(
     fun startCall(contactId: String, contactName: String, localSenderId: String): String {
         val callId = UUID.randomUUID().toString()
         currentCallId = callId
+        currentContactId = contactId
+        currentContactName = contactName
+        currentLocalId = localSenderId
+
         _callState.value = CallState.OutgoingRinging(callId, contactId, contactName)
         setupAudio(speaker = false)
 
-        // Generate synthetic audio-only SDP offer with Opus mono/DTX constraints
-        val sdpOffer = generateAudioOnlySdp(isOffer = true)
-        val offerSignal = CallSignal.Offer(callId, sdpOffer, localSenderId, contactId)
-        _outgoingSignals.tryEmit(offerSignal)
+        val pc = createPeerConnection(callId)
+        if (pc == null) {
+            _callState.value = CallState.Failed(callId, "Calling service unavailable (WebRTC init error)")
+            return callId
+        }
+
+        val mediaConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+        }
+
+        pc.createOffer(object : SdpObserver {
+            override fun onCreateSuccess(desc: SessionDescription?) {
+                if (desc == null) return
+                pc.setLocalDescription(object : SdpObserver {
+                    override fun onSetSuccess() {
+                        val offerSignal = CallSignal.Offer(callId, desc.description, localSenderId, contactId)
+                        _outgoingSignals.tryEmit(offerSignal)
+                    }
+                    override fun onSetFailure(error: String?) {
+                        endCall("Failed to set local description: $error")
+                    }
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onCreateFailure(p0: String?) {}
+                }, desc)
+            }
+
+            override fun onCreateFailure(error: String?) {
+                endCall("Failed to create offer: $error")
+            }
+
+            override fun onSetSuccess() {}
+            override fun onSetFailure(p0: String?) {}
+        }, mediaConstraints)
 
         // 30-second ringing timeout
         timeoutJob?.cancel()
@@ -126,12 +255,15 @@ class AudioCallManager @Inject constructor(
      */
     fun onIncomingOffer(offer: CallSignal.Offer, contactName: String) {
         if (_callState.value !is CallState.Idle) {
-            // Busy with another call: reject
             _outgoingSignals.tryEmit(CallSignal.Reject(offer.callId, offer.recipientId, offer.senderId, "Busy"))
             return
         }
 
         currentCallId = offer.callId
+        currentContactId = offer.senderId
+        currentContactName = contactName
+        currentLocalId = offer.recipientId
+
         _callState.value = CallState.IncomingRinging(
             callId = offer.callId,
             contactId = offer.senderId,
@@ -139,7 +271,7 @@ class AudioCallManager @Inject constructor(
             sdpOffer = offer.sdp
         )
 
-        // Ringing response
+        // Send Ringing response
         _outgoingSignals.tryEmit(CallSignal.Ringing(offer.callId, offer.recipientId, offer.senderId))
 
         // 30-second incoming ringing timeout
@@ -163,12 +295,50 @@ class AudioCallManager @Inject constructor(
         _callState.value = CallState.Connecting(current.callId, current.contactId, current.contactName)
         setupAudio(speaker = false)
 
-        val sdpAnswer = generateAudioOnlySdp(isOffer = false)
-        val answerSignal = CallSignal.Answer(current.callId, sdpAnswer, localSenderId, current.contactId)
-        _outgoingSignals.tryEmit(answerSignal)
+        val pc = createPeerConnection(current.callId)
+        if (pc == null) {
+            endCall("WebRTC engine unavailable")
+            return
+        }
 
-        // Connected
-        transitionToConnected(current.callId, current.contactId, current.contactName)
+        val remoteDesc = SessionDescription(SessionDescription.Type.OFFER, current.sdpOffer)
+        pc.setRemoteDescription(object : SdpObserver {
+            override fun onSetSuccess() {
+                val mediaConstraints = MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                }
+
+                pc.createAnswer(object : SdpObserver {
+                    override fun onCreateSuccess(answerDesc: SessionDescription?) {
+                        if (answerDesc == null) return
+                        pc.setLocalDescription(object : SdpObserver {
+                            override fun onSetSuccess() {
+                                val answerSignal = CallSignal.Answer(current.callId, answerDesc.description, localSenderId, current.contactId)
+                                _outgoingSignals.tryEmit(answerSignal)
+                            }
+                            override fun onSetFailure(error: String?) {
+                                endCall("Failed to set local answer: $error")
+                            }
+                            override fun onCreateSuccess(p0: SessionDescription?) {}
+                            override fun onCreateFailure(p0: String?) {}
+                        }, answerDesc)
+                    }
+                    override fun onCreateFailure(error: String?) {
+                        endCall("Failed to create answer: $error")
+                    }
+                    override fun onSetSuccess() {}
+                    override fun onSetFailure(p0: String?) {}
+                }, mediaConstraints)
+            }
+
+            override fun onSetFailure(error: String?) {
+                endCall("Failed to set remote offer: $error")
+            }
+
+            override fun onCreateSuccess(p0: SessionDescription?) {}
+            override fun onCreateFailure(p0: String?) {}
+        }, remoteDesc)
     }
 
     /**
@@ -181,7 +351,7 @@ class AudioCallManager @Inject constructor(
 
         _outgoingSignals.tryEmit(CallSignal.Reject(current.callId, localSenderId, current.contactId, "Declined"))
         _callState.value = CallState.Ended(current.callId, "Declined", 0L)
-        teardownAudio()
+        cleanupCallResources()
     }
 
     /**
@@ -191,7 +361,33 @@ class AudioCallManager @Inject constructor(
         val current = _callState.value
         if (current is CallState.OutgoingRinging && current.callId == answer.callId) {
             timeoutJob?.cancel()
-            transitionToConnected(current.callId, current.contactId, current.contactName)
+            val pc = peerConnection ?: return
+            val remoteDesc = SessionDescription(SessionDescription.Type.ANSWER, answer.sdp)
+            pc.setRemoteDescription(object : SdpObserver {
+                override fun onSetSuccess() {
+                    // Note: connected transition will occur via PeerConnection.Observer onIceConnectionChange
+                }
+                override fun onSetFailure(error: String?) {
+                    endCall("Failed to set remote answer: $error")
+                }
+                override fun onCreateSuccess(p0: SessionDescription?) {}
+                override fun onCreateFailure(p0: String?) {}
+            }, remoteDesc)
+        }
+    }
+
+    /**
+     * Adds received remote ICE candidate.
+     */
+    fun onRemoteIceCandidate(candidateSignal: CallSignal.IceCandidate) {
+        val pc = peerConnection ?: return
+        if (currentCallId == candidateSignal.callId) {
+            val iceCandidate = IceCandidate(
+                candidateSignal.sdpMid,
+                candidateSignal.sdpMLineIndex,
+                candidateSignal.sdpCandidate
+            )
+            pc.addIceCandidate(iceCandidate)
         }
     }
 
@@ -203,7 +399,7 @@ class AudioCallManager @Inject constructor(
         if (current is CallState.OutgoingRinging && current.callId == reject.callId) {
             timeoutJob?.cancel()
             _callState.value = CallState.Ended(reject.callId, reject.reason, 0L)
-            teardownAudio()
+            cleanupCallResources()
         }
     }
 
@@ -216,7 +412,7 @@ class AudioCallManager @Inject constructor(
             timeoutJob?.cancel()
             callDurationJob?.cancel()
             _callState.value = CallState.Ended(hangup.callId, "Call ended by peer", hangup.durationSeconds)
-            teardownAudio()
+            cleanupCallResources()
         }
     }
 
@@ -226,14 +422,7 @@ class AudioCallManager @Inject constructor(
     fun hangup(localSenderId: String) {
         val current = _callState.value
         val callId = currentCallId ?: return
-        val contactId = when (current) {
-            is CallState.Connected -> current.contactId
-            is CallState.Connecting -> current.contactId
-            is CallState.OutgoingRinging -> current.contactId
-            is CallState.IncomingRinging -> current.contactId
-            is CallState.Reconnecting -> current.contactId
-            else -> ""
-        }
+        val contactId = currentContactId ?: ""
         val duration = if (current is CallState.Connected) {
             (System.currentTimeMillis() - current.connectedAtEpochMs) / 1000L
         } else 0L
@@ -246,13 +435,14 @@ class AudioCallManager @Inject constructor(
         }
 
         _callState.value = CallState.Ended(callId, "Call ended", duration)
-        teardownAudio()
+        cleanupCallResources()
     }
 
     fun toggleMute(): Boolean {
         val current = _callState.value
         if (current is CallState.Connected) {
             val newMute = !current.isMuted
+            localAudioTrack?.setEnabled(!newMute)
             audioManager.isMicrophoneMute = newMute
             _callState.value = current.copy(isMuted = newMute)
             return newMute
@@ -276,7 +466,7 @@ class AudioCallManager @Inject constructor(
         timeoutJob?.cancel()
         callDurationJob?.cancel()
         _callState.value = CallState.Ended(callId, reason, 0L)
-        teardownAudio()
+        cleanupCallResources()
     }
 
     private fun transitionToConnected(callId: String, contactId: String, contactName: String) {
@@ -306,36 +496,20 @@ class AudioCallManager @Inject constructor(
         } catch (_: Exception) {}
     }
 
-    private fun teardownAudio() {
+    private fun cleanupCallResources() {
         try {
             audioManager.mode = AudioManager.MODE_NORMAL
             audioManager.isMicrophoneMute = false
             audioManager.isSpeakerphoneOn = false
+            localAudioTrack?.setEnabled(false)
+            localAudioTrack?.dispose()
+            localAudioTrack = null
+            audioSource?.dispose()
+            audioSource = null
+            peerConnection?.close()
+            peerConnection?.dispose()
+            peerConnection = null
         } catch (_: Exception) {}
-    }
-
-    private fun generateAudioOnlySdp(isOffer: Boolean): String {
-        val isPrivacyOn = privacyManager.isIpPrivacyEnabled.value
-        return buildString {
-            append("v=0\r\n")
-            append("o=- ${System.currentTimeMillis()} 2 IN IP4 127.0.0.1\r\n")
-            append("s=CiphrChat Audio Call\r\n")
-            append("t=0 0\r\n")
-            append("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n")
-            append("c=IN IP4 0.0.0.0\r\n")
-            append("a=rtpmap:111 opus/48000/2\r\n")
-            append("a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1\r\n") // FEC & DTX enabled for weak network
-            if (isOffer) {
-                append("a=sendrecv\r\n")
-            } else {
-                append("a=sendrecv\r\n")
-            }
-            if (isPrivacyOn) {
-                append("a=candidate:1 1 UDP 41819903 127.0.0.1 3478 typ relay raddr 0.0.0.0 rport 0\r\n")
-            } else {
-                append("a=candidate:1 1 UDP 2122252543 192.168.1.1 54321 typ host\r\n")
-            }
-        }
     }
 
     private fun CallState.isCallActive(checkCallId: String): Boolean {

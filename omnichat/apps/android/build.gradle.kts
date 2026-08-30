@@ -24,6 +24,30 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "CIPHRCHAT_RELAY_ADDRESS", "\"$relayAddress\"")
 
+        val turnUrl = project.providers.gradleProperty("ciphrchatTurnUrl")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_TURN_URL"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_TURN_URL", "\"$turnUrl\"")
+
+        val turnUsername = project.providers.gradleProperty("ciphrchatTurnUsername")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_TURN_USERNAME"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_TURN_USERNAME", "\"$turnUsername\"")
+
+        val turnCredential = project.providers.gradleProperty("ciphrchatTurnCredential")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_TURN_CREDENTIAL"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_TURN_CREDENTIAL", "\"$turnCredential\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -115,6 +139,7 @@ dependencies {
     implementation(libs.androidx.core.uwb)
     implementation(libs.guava)
     implementation(libs.signal.protocol.java)
+    implementation("io.getstream:stream-webrtc-android:1.3.9")
 
     testImplementation(libs.junit)
 
