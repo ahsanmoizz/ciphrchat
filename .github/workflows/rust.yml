@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/**"]
   pull_request:
     branches: ["main"]
 
@@ -34,6 +34,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Verify deployed encrypted mailbox end to end
+        if: vars.CIPHRCHAT_RELAY_ADDRESS != ''
         working-directory: omnichat/crates
         env:
           CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
