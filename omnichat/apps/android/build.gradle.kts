@@ -48,6 +48,29 @@ android {
             .replace("\"", "\\\"")
         buildConfigField("String", "CIPHRCHAT_TURN_CREDENTIAL", "\"$turnCredential\"")
 
+        val blockchainRpcUrl = project.providers.gradleProperty("ciphrchatBlockchainRpcUrl")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_BLOCKCHAIN_RPC_URL"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_BLOCKCHAIN_RPC_URL", "\"$blockchainRpcUrl\"")
+
+        val registryContractAddress = project.providers.gradleProperty("ciphrchatRegistryContractAddress")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_REGISTRY_CONTRACT_ADDRESS"))
+            .orElse("")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "CIPHRCHAT_REGISTRY_CONTRACT_ADDRESS", "\"$registryContractAddress\"")
+
+        val blockchainChainId = project.providers.gradleProperty("ciphrchatBlockchainChainId")
+            .orElse(project.providers.environmentVariable("CIPHRCHAT_BLOCKCHAIN_CHAIN_ID"))
+            .orElse("84532")
+            .get()
+            .toLongOrNull() ?: 84532L
+        buildConfigField("long", "CIPHRCHAT_BLOCKCHAIN_CHAIN_ID", "${blockchainChainId}L")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }

@@ -13,6 +13,7 @@ object BlockchainConfig {
     const val CHAIN_BASE_MAINNET = 8453L
 
     // Supported Testnet Chain IDs
+    const val CHAIN_BASE_SEPOLIA = 84532L
     const val CHAIN_SEPOLIA = 11155111L
     const val CHAIN_ARBITRUM_SEPOLIA = 421614L
     const val CHAIN_LOCAL_HARDHAT = 31337L
@@ -28,6 +29,7 @@ object BlockchainConfig {
     )
 
     val SUPPORTED_TESTNET_CHAINS = setOf(
+        CHAIN_BASE_SEPOLIA,
         CHAIN_SEPOLIA,
         CHAIN_ARBITRUM_SEPOLIA,
         CHAIN_LOCAL_HARDHAT,
@@ -48,7 +50,7 @@ object BlockchainConfig {
     // getRelayCount() => 0x2170366a
     const val SELECTOR_GET_RELAY_COUNT = "2170366a"
 
-    // Default Sepolia Testnet contract address (placeholder until official deployment)
-    const val DEFAULT_SEPOLIA_REGISTRY_ADDRESS = "0x0000000000000000000000000000000000000000"
-    const val DEFAULT_SEPOLIA_RPC_URL = "https://rpc.sepolia.org"
+    // Default Base Sepolia Testnet parameters (placeholder until official deployment)
+    const val DEFAULT_BASE_SEPOLIA_REGISTRY_ADDRESS = "0x0000000000000000000000000000000000000000"
+    const val DEFAULT_BASE_SEPOLIA_RPC_URL = "https://sepolia.base.org"
 }

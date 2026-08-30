@@ -30,8 +30,9 @@ class MainnetProtectionPolicyTest {
     }
 
     @Test
-    fun acceptsApprovedTestnets() {
+    fun acceptsApprovedTestnetsIncludingBaseSepolia() {
         val allowed = listOf(
+            BlockchainConfig.CHAIN_BASE_SEPOLIA,
             BlockchainConfig.CHAIN_SEPOLIA,
             BlockchainConfig.CHAIN_ARBITRUM_SEPOLIA,
             BlockchainConfig.CHAIN_LOCAL_HARDHAT,
