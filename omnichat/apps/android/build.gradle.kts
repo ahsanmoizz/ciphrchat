@@ -101,6 +101,8 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
