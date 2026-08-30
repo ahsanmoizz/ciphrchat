@@ -188,31 +188,43 @@ fun ChatScreen(
             modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(visibleMessages, key = { it.messageId }) { message ->
+            items(visibleMessages, key = { it.id }) { message ->
                 val timeFormat = remember { SimpleDateFormat("HH:mm", currentLocale) }
-                val timeStr = remember(message.timestampEpochMs) { timeFormat.format(Date(message.timestampEpochMs)) }
+                val timeStr = remember(message.createdAtEpochMs) { timeFormat.format(Date(message.createdAtEpochMs)) }
+                val statusStr = if (message.direction == MessageDirection.OUTGOING) {
+                    when (message.status) {
+                        org.ciphrchat.app.messaging.MessageStatus.QUEUED -> "Queued"
+                        org.ciphrchat.app.messaging.MessageStatus.ROUTING -> "Routing"
+                        org.ciphrchat.app.messaging.MessageStatus.SENT -> "Sent"
+                        org.ciphrchat.app.messaging.MessageStatus.DELIVERED -> "Delivered"
+                        org.ciphrchat.app.messaging.MessageStatus.FAILED -> "Failed"
+                    }
+                } else null
+
                 CiphrMessageBubble(
                     text = message.body,
+                    time = timeStr,
                     isOutgoing = message.direction == MessageDirection.OUTGOING,
-                    timestamp = timeStr,
-                    isEncrypted = true,
-                    transportLabel = message.transportLabel,
-                    attachmentName = message.attachmentFileName,
-                    attachmentSize = message.attachmentSizeBytes,
-                    attachmentMime = message.attachmentMimeType,
-                    onOpenAttachment = {
-                        viewModel.materializeAttachment(message) { result ->
-                            result.onSuccess { file ->
-                                val authority = "${context.packageName}.fileprovider"
-                                val uri = FileProvider.getUriForFile(context, authority, file)
-                                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(uri, message.attachmentMimeType ?: "*/*")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    statusLabel = statusStr,
+                    selectedTransport = message.selectedTransport,
+                    attachmentFileName = message.attachmentFileName,
+                    attachmentMimeType = message.attachmentMimeType,
+                    attachmentSizeBytes = message.attachmentSizeBytes,
+                    onOpenAttachment = if (message.attachmentFileName != null) {
+                        {
+                            viewModel.materializeAttachment(message) { result ->
+                                result.onSuccess { file ->
+                                    val authority = "${context.packageName}.fileprovider"
+                                    val uri = FileProvider.getUriForFile(context, authority, file)
+                                    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, message.attachmentMimeType ?: "*/*")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    runCatching { context.startActivity(viewIntent) }
                                 }
-                                runCatching { context.startActivity(viewIntent) }
                             }
                         }
-                    }
+                    } else null
                 )
             }
         }

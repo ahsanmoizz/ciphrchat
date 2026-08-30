@@ -167,6 +167,7 @@ class AudioCallManager @Inject constructor(
                 }
                 val signal = CallSignal.IceCandidate(
                     callId = callId,
+                    recipientId = currentContactId ?: "",
                     sdpMid = candidate.sdpMid ?: "",
                     sdpMLineIndex = candidate.sdpMLineIndex,
                     sdpCandidate = candidate.sdp

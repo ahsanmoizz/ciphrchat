@@ -70,7 +70,15 @@ class BlockchainRegistryService @Inject constructor() {
             val decodedList = decodeRelayInfoArray(hex)
             decodedList
                 .filter { it.active && it.multiaddr.isNotBlank() }
-                .map { RelayDiscoveryParser.DiscoveredRelay(relayAddress = it.multiaddr, isAlive = true, latencyMs = 0L) }
+                .map {
+                    RelayDiscoveryParser.DiscoveredRelay(
+                        ownerAddress = it.owner,
+                        multiaddress = it.multiaddr,
+                        capacity = it.capacity,
+                        registeredAtEpochMs = it.registeredAt * 1000L,
+                        isActive = it.active
+                    )
+                }
         }
     }
 

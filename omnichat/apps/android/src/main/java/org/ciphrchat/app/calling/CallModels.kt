@@ -55,12 +55,13 @@ sealed interface CallState {
 
 sealed class CallSignal(val type: String) {
     abstract val callId: String
+    abstract val recipientId: String
 
     data class Offer(
         override val callId: String,
         val sdp: String,
         val senderId: String,
-        val recipientId: String,
+        override val recipientId: String,
         val timestamp: Long = System.currentTimeMillis()
     ) : CallSignal("OFFER")
 
@@ -68,12 +69,13 @@ sealed class CallSignal(val type: String) {
         override val callId: String,
         val sdp: String,
         val senderId: String,
-        val recipientId: String,
+        override val recipientId: String,
         val timestamp: Long = System.currentTimeMillis()
     ) : CallSignal("ANSWER")
 
     data class IceCandidate(
         override val callId: String,
+        override val recipientId: String,
         val sdpMid: String,
         val sdpMLineIndex: Int,
         val sdpCandidate: String
@@ -82,32 +84,32 @@ sealed class CallSignal(val type: String) {
     data class Ringing(
         override val callId: String,
         val senderId: String,
-        val recipientId: String
+        override val recipientId: String
     ) : CallSignal("RINGING")
 
     data class Reject(
         override val callId: String,
         val senderId: String,
-        val recipientId: String,
+        override val recipientId: String,
         val reason: String
     ) : CallSignal("REJECT")
 
     data class Hangup(
         override val callId: String,
         val senderId: String,
-        val recipientId: String,
+        override val recipientId: String,
         val durationSeconds: Long
     ) : CallSignal("HANGUP")
 
     fun toJson(): String {
-        val root = JSONObject().put("type", type).put("callId", callId)
+        val root = JSONObject().put("type", type).put("callId", callId).put("recipientId", recipientId)
         when (this) {
-            is Offer -> root.put("sdp", sdp).put("senderId", senderId).put("recipientId", recipientId).put("timestamp", timestamp)
-            is Answer -> root.put("sdp", sdp).put("senderId", senderId).put("recipientId", recipientId).put("timestamp", timestamp)
+            is Offer -> root.put("sdp", sdp).put("senderId", senderId).put("timestamp", timestamp)
+            is Answer -> root.put("sdp", sdp).put("senderId", senderId).put("timestamp", timestamp)
             is IceCandidate -> root.put("sdpMid", sdpMid).put("sdpMLineIndex", sdpMLineIndex).put("sdpCandidate", sdpCandidate)
-            is Ringing -> root.put("senderId", senderId).put("recipientId", recipientId)
-            is Reject -> root.put("senderId", senderId).put("recipientId", recipientId).put("reason", reason)
-            is Hangup -> root.put("senderId", senderId).put("recipientId", recipientId).put("durationSeconds", durationSeconds)
+            is Ringing -> root.put("senderId", senderId)
+            is Reject -> root.put("senderId", senderId).put("reason", reason)
+            is Hangup -> root.put("senderId", senderId).put("durationSeconds", durationSeconds)
         }
         return root.toString()
     }
@@ -117,13 +119,14 @@ sealed class CallSignal(val type: String) {
             val json = JSONObject(jsonStr)
             val type = json.getString("type")
             val callId = json.getString("callId")
+            val recipientId = json.optString("recipientId", "")
             when (type) {
-                "OFFER" -> Offer(callId, json.getString("sdp"), json.getString("senderId"), json.getString("recipientId"), json.optLong("timestamp"))
-                "ANSWER" -> Answer(callId, json.getString("sdp"), json.getString("senderId"), json.getString("recipientId"), json.optLong("timestamp"))
-                "ICE_CANDIDATE" -> IceCandidate(callId, json.getString("sdpMid"), json.getInt("sdpMLineIndex"), json.getString("sdpCandidate"))
-                "RINGING" -> Ringing(callId, json.getString("senderId"), json.getString("recipientId"))
-                "REJECT" -> Reject(callId, json.getString("senderId"), json.getString("recipientId"), json.optString("reason", "Decline"))
-                "HANGUP" -> Hangup(callId, json.getString("senderId"), json.getString("recipientId"), json.optLong("durationSeconds", 0L))
+                "OFFER" -> Offer(callId, json.getString("sdp"), json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("timestamp"))
+                "ANSWER" -> Answer(callId, json.getString("sdp"), json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("timestamp"))
+                "ICE_CANDIDATE" -> IceCandidate(callId, recipientId, json.getString("sdpMid"), json.getInt("sdpMLineIndex"), json.getString("sdpCandidate"))
+                "RINGING" -> Ringing(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") })
+                "REJECT" -> Reject(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optString("reason", "Decline"))
+                "HANGUP" -> Hangup(callId, json.getString("senderId"), recipientId.ifBlank { json.getString("recipientId") }, json.optLong("durationSeconds", 0L))
                 else -> null
             }
         }.getOrNull()

@@ -2,7 +2,7 @@ use axum::{
     body::Bytes,
     extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -807,7 +807,10 @@ pub fn generate_turn_credentials(
     ttl_seconds: u64,
     user_id: &str,
 ) -> anyhow::Result<TurnCredentialsResponse> {
-    anyhow::ensure!(!secret.trim().is_empty(), "TURN static secret is not configured");
+    anyhow::ensure!(
+        !secret.trim().is_empty(),
+        "TURN static secret is not configured"
+    );
     let now_sec = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -819,7 +822,11 @@ pub fn generate_turn_credentials(
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .take(32)
         .collect();
-    let effective_user = if clean_user.is_empty() { "ciphr_user" } else { &clean_user };
+    let effective_user = if clean_user.is_empty() {
+        "ciphr_user"
+    } else {
+        &clean_user
+    };
     let turn_username = format!("{expires_at}:{effective_user}");
 
     let hmac_bytes = hmac_sha1(secret.as_bytes(), turn_username.as_bytes());
@@ -835,21 +842,10 @@ pub fn generate_turn_credentials(
 
 async fn turn_credentials_handler(
     State(state): State<AppState>,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body_bytes: Bytes,
-) -> Result<
-    (
-        StatusCode,
-        [(axum::http::HeaderName, &'static str); 1],
-        Json<TurnCredentialsResponse>,
-    ),
-    (
-        StatusCode,
-        [(axum::http::HeaderName, &'static str); 1],
-        Json<serde_json::Value>,
-    ),
-> {
+) -> Response {
     let now_sec = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -857,20 +853,17 @@ async fn turn_credentials_handler(
 
     // 1. Enforce max request body size (4 KiB)
     if body_bytes.len() > 4096 {
-        return Err((
+        return (
             StatusCode::BAD_REQUEST,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(serde_json::json!({ "error": "Request body exceeds 4 KiB limit" })),
-        ));
+        )
+            .into_response();
     }
 
     // 2. Resolve real client IP: direct TCP peer or loopback proxy headers
-    let peer_ip = connect_info
-        .map(|ci| ci.0.ip())
-        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-
-    let mut client_ip = peer_ip;
-    if peer_ip.is_loopback() {
+    let mut client_ip = peer_addr.ip();
+    if peer_addr.ip().is_loopback() {
         if let Some(forwarded_for) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             if let Some(first_ip_str) = forwarded_for.split(',').next().map(|s| s.trim()) {
                 if let Ok(parsed_ip) = first_ip_str.parse::<IpAddr>() {
@@ -886,11 +879,14 @@ async fn turn_credentials_handler(
 
     // 3. Enforce per-source-IP rate limiting (10 requests per minute per IP)
     if !state.rate_limiter.check_and_record(client_ip, now_sec) {
-        return Err((
+        return (
             StatusCode::TOO_MANY_REQUESTS,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({ "error": "Rate limit exceeded. Maximum 10 requests per minute per IP." })),
-        ));
+            Json(
+                serde_json::json!({ "error": "Rate limit exceeded. Maximum 10 requests per minute per IP." }),
+            ),
+        )
+            .into_response();
     }
 
     // 4. Parse JSON body if present
@@ -900,11 +896,12 @@ async fn turn_credentials_handler(
         match serde_json::from_slice(&body_bytes) {
             Ok(r) => Some(r),
             Err(_) => {
-                return Err((
+                return (
                     StatusCode::BAD_REQUEST,
                     [(axum::http::header::CACHE_CONTROL, "no-store")],
                     Json(serde_json::json!({ "error": "Malformed JSON payload" })),
-                ));
+                )
+                    .into_response();
             }
         }
     };
@@ -917,43 +914,51 @@ async fn turn_credentials_handler(
     // 5. Validate username: 1..=64 chars, only alphanumeric, underscore, or hyphen
     if user_id.is_empty()
         || user_id.len() > 64
-        || !user_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        || !user_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        return Err((
+        return (
             StatusCode::BAD_REQUEST,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({ "error": "Malformed username. Must be 1-64 alphanumeric, underscore, or hyphen characters." })),
-        ));
+            Json(
+                serde_json::json!({ "error": "Malformed username. Must be 1-64 alphanumeric, underscore, or hyphen characters." }),
+            ),
+        )
+            .into_response();
     }
 
     // 6. Generate credentials
     let secret = env::var("TURN_STATIC_AUTH_SECRET").unwrap_or_default();
     if secret.trim().is_empty() {
-        return Err((
+        return (
             StatusCode::SERVICE_UNAVAILABLE,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
-        ));
+        )
+            .into_response();
     }
 
-    let turn_url = env::var("TURN_PUBLIC_URL")
-        .unwrap_or_else(|_| "turn:relay.ciphrchat.org:3478".to_string());
+    let turn_url =
+        env::var("TURN_PUBLIC_URL").unwrap_or_else(|_| "turn:relay.ciphrchat.org:3478".to_string());
     let ttl_seconds: u64 = env::var("TURN_CREDENTIAL_TTL_SECONDS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(600);
 
     match generate_turn_credentials(&secret, &turn_url, ttl_seconds, user_id) {
-        Ok(response) => Ok((
+        Ok(response) => (
             StatusCode::OK,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(response),
-        )),
-        Err(_) => Err((
+        )
+            .into_response(),
+        Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
-        )),
+        )
+            .into_response(),
     }
 }
 

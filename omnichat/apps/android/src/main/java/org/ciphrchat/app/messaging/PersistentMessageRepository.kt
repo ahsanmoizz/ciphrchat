@@ -95,7 +95,7 @@ class PersistentMessageRepository @Inject constructor(
                         messageId = messageId,
                         senderId = localId,
                         recipientId = contact.contactId,
-                        encryptedPayload = ciphertext,
+                        encryptedPayload = ciphertext.serialize(),
                         createdAtEpochMs = System.currentTimeMillis(),
                         expiresAtEpochMs = System.currentTimeMillis() + 60_000L,
                         protocolVersion = 1,
