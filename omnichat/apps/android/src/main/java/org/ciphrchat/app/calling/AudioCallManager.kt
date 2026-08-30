@@ -72,17 +72,14 @@ class AudioCallManager @Inject constructor(
     }
 
     /**
-     * Fetches short-lived ephemeral TURN REST credentials from the bootstrap relay service.
+     * Fetches short-lived ephemeral TURN REST credentials using explicit CIPHRCHAT_TURN_CREDENTIAL_URL.
+     * Never derives HTTP URLs from libp2p addresses and never uses localhost fallbacks silently.
      */
     suspend fun fetchTurnCredentials(userId: String): PeerConnection.IceServer? = withContext(Dispatchers.IO) {
         runCatching {
-            val endpointUrl = when {
-                BuildConfig.CIPHRCHAT_TURN_CREDENTIAL_URL.isNotBlank() -> BuildConfig.CIPHRCHAT_TURN_CREDENTIAL_URL
-                BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isNotBlank() -> {
-                    val base = BuildConfig.CIPHRCHAT_RELAY_ADDRESS.removePrefix("http://").removePrefix("https://")
-                    "http://$base/turn/credentials"
-                }
-                else -> "http://127.0.0.1:18081/turn/credentials"
+            val endpointUrl = BuildConfig.CIPHRCHAT_TURN_CREDENTIAL_URL
+            if (endpointUrl.isBlank()) {
+                return@runCatching null
             }
 
             val url = URL(endpointUrl)
@@ -93,7 +90,8 @@ class AudioCallManager @Inject constructor(
             connection.readTimeout = 5000
             connection.doOutput = true
 
-            val body = JSONObject().put("username", userId).toString()
+            val cleanUserId = userId.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(64)
+            val body = JSONObject().put("username", cleanUserId.ifBlank { "ciphr_user" }).toString()
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
             if (connection.responseCode in 200..299) {
@@ -255,7 +253,7 @@ class AudioCallManager @Inject constructor(
             val iceServers = getIceServers(localSenderId)
             val pc = createPeerConnection(callId, iceServers)
             if (pc == null) {
-                _callState.value = CallState.Failed(callId, "Calling service unavailable (TURN required for IP privacy)")
+                _callState.value = CallState.Failed(callId, "Calling service unavailable")
                 return@launch
             }
 
@@ -347,7 +345,7 @@ class AudioCallManager @Inject constructor(
             val iceServers = getIceServers(localSenderId)
             val pc = createPeerConnection(current.callId, iceServers)
             if (pc == null) {
-                endCall("Calling service unavailable (TURN required for IP privacy)")
+                endCall("Calling service unavailable")
                 return@launch
             }
 

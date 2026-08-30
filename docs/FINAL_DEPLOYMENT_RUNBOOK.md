@@ -117,6 +117,7 @@ Prepare the configuration bundle for Android APK build (NO SECRETS):
 - `REGISTRY_CONTRACT_ADDRESS="0x..."`
 - `PUBLIC_RELAY_ADDRESS="/ip4/<VPS_PUBLIC_IP>/tcp/4001/p2p/<RELAY_PEER_ID>"`
 - `TURN_PUBLIC_URL="turn:<VPS_PUBLIC_IP>:3478"`
+- `TURN_CREDENTIAL_URL="https://<VPS_DOMAIN_OR_IP>/turn/credentials"`
 - `BLOCKCHAIN_CHAIN_ID="84532"`
 
 > [!NOTE]
@@ -135,7 +136,8 @@ cd omnichat
   -PciphrchatBlockchainRpcUrl="$BASE_SEPOLIA_RPC_URL" \
   -PciphrchatRegistryContractAddress="$REGISTRY_CONTRACT_ADDRESS" \
   -PciphrchatBlockchainChainId=84532 \
-  -PciphrchatTurnUrl="$TURN_PUBLIC_URL"
+  -PciphrchatTurnUrl="$TURN_PUBLIC_URL" \
+  -PciphrchatTurnCredentialUrl="$TURN_CREDENTIAL_URL"
 ```
 
 ### Windows PowerShell:
@@ -146,7 +148,8 @@ Set-Location omnichat
   -PciphrchatBlockchainRpcUrl="$BASE_SEPOLIA_RPC_URL" `
   -PciphrchatRegistryContractAddress="$REGISTRY_CONTRACT_ADDRESS" `
   -PciphrchatBlockchainChainId=84532 `
-  -PciphrchatTurnUrl="$TURN_PUBLIC_URL"
+  -PciphrchatTurnUrl="$TURN_PUBLIC_URL" `
+  -PciphrchatTurnCredentialUrl="$TURN_CREDENTIAL_URL"
 ```
 
 ---

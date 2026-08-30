@@ -16,12 +16,13 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
+    collections::HashMap,
     env, fs,
     fs::OpenOptions,
     io::{Read, Write},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -567,10 +568,37 @@ async fn health() -> Json<Health> {
 // Axum Handlers for Large Files
 // -------------------------------------------------------------------------------------------------
 
+#[derive(Debug)]
+pub struct RateLimiter {
+    requests: Mutex<HashMap<IpAddr, Vec<u64>>>,
+    max_per_minute: usize,
+}
+
+impl RateLimiter {
+    pub fn new(max_per_minute: usize) -> Self {
+        Self {
+            requests: Mutex::new(HashMap::new()),
+            max_per_minute,
+        }
+    }
+
+    pub fn check_and_record(&self, ip: IpAddr, now_sec: u64) -> bool {
+        let mut lock = self.requests.lock().unwrap();
+        let entry = lock.entry(ip).or_default();
+        entry.retain(|&t| t + 60 > now_sec);
+        if entry.len() >= self.max_per_minute {
+            return false;
+        }
+        entry.push(now_sec);
+        true
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     info: RelayInfo,
     file_store: Arc<FileStore>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 async fn init_file_handler(
@@ -806,13 +834,83 @@ pub fn generate_turn_credentials(
 }
 
 async fn turn_credentials_handler(
-    State(_state): State<AppState>,
-    body: Option<Json<TurnCredentialsRequest>>,
-) -> Result<Json<TurnCredentialsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    State(state): State<AppState>,
+    body_bytes: Bytes,
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        Json<TurnCredentialsResponse>,
+    ),
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        Json<serde_json::Value>,
+    ),
+> {
+    let now_sec = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // 1. Enforce max request body size (4 KiB)
+    if body_bytes.len() > 4096 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "error": "Request body exceeds 4 KiB limit" })),
+        ));
+    }
+
+    // 2. Enforce per-source-IP rate limiting (10 requests per minute)
+    let client_ip = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    if !state.rate_limiter.check_and_record(client_ip, now_sec) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "error": "Rate limit exceeded. Maximum 10 requests per minute." })),
+        ));
+    }
+
+    // 3. Parse JSON body if present
+    let req: Option<TurnCredentialsRequest> = if body_bytes.is_empty() {
+        None
+    } else {
+        match serde_json::from_slice(&body_bytes) {
+            Ok(r) => Some(r),
+            Err(_) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    [(axum::http::header::CACHE_CONTROL, "no-store")],
+                    Json(serde_json::json!({ "error": "Malformed JSON payload" })),
+                ));
+            }
+        }
+    };
+
+    let user_id = req
+        .as_ref()
+        .and_then(|r| r.username.as_deref())
+        .unwrap_or("ciphr_user");
+
+    // 4. Validate username: 1..=64 chars, only alphanumeric, underscore, or hyphen
+    if user_id.is_empty()
+        || user_id.len() > 64
+        || !user_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "error": "Malformed username. Must be 1-64 alphanumeric, underscore, or hyphen characters." })),
+        ));
+    }
+
+    // 5. Generate credentials
     let secret = env::var("TURN_STATIC_AUTH_SECRET").unwrap_or_default();
     if secret.trim().is_empty() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
             Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
         ));
     }
@@ -824,19 +922,18 @@ async fn turn_credentials_handler(
         .and_then(|s| s.parse().ok())
         .unwrap_or(600);
 
-    let user_id = body
-        .as_ref()
-        .and_then(|Json(r)| r.username.as_deref())
-        .unwrap_or("ciphr_user");
-
-    generate_turn_credentials(&secret, &turn_url, ttl_seconds, user_id)
-        .map(Json)
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
-            )
-        })
+    match generate_turn_credentials(&secret, &turn_url, ttl_seconds, user_id) {
+        Ok(response) => Ok((
+            StatusCode::OK,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(response),
+        )),
+        Err(_) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
+        )),
+    }
 }
 
 #[derive(NetworkBehaviour)]
@@ -933,7 +1030,12 @@ async fn run_http_server(
         tcp_port,
         quic_port,
     };
-    let app_state = AppState { info, file_store };
+    let rate_limiter = Arc::new(RateLimiter::new(10));
+    let app_state = AppState {
+        info,
+        file_store,
+        rate_limiter,
+    };
 
     let app = Router::new()
         .route("/health", get(health))
@@ -941,8 +1043,8 @@ async fn run_http_server(
             "/info",
             get(|State(state): State<AppState>| async move { Json(state.info) }),
         )
-        .route("/turn/credentials", post(turn_credentials_handler).get(turn_credentials_handler))
-        .route("/ciphrchat/turn-credentials/1", post(turn_credentials_handler).get(turn_credentials_handler))
+        .route("/turn/credentials", post(turn_credentials_handler))
+        .route("/ciphrchat/turn-credentials/1", post(turn_credentials_handler))
         .route("/files/init", post(init_file_handler))
         .route(
             "/files/upload/{file_id}/{chunk_index}",
@@ -1260,6 +1362,24 @@ mod tests {
             .is_err());
 
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn test_rate_limiter_allows_up_to_max_and_blocks_excess() {
+        let limiter = RateLimiter::new(3);
+        let ip: IpAddr = "192.0.2.1".parse().unwrap();
+        let now = 1000u64;
+
+        // 3 requests within the same minute should be allowed
+        assert!(limiter.check_and_record(ip, now));
+        assert!(limiter.check_and_record(ip, now + 10));
+        assert!(limiter.check_and_record(ip, now + 20));
+
+        // 4th request within the same 60 seconds should be blocked (rate limited)
+        assert!(!limiter.check_and_record(ip, now + 30));
+
+        // After 61 seconds, window expires and new request is allowed
+        assert!(limiter.check_and_record(ip, now + 65));
     }
 
     #[test]
