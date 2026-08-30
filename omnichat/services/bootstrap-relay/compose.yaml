@@ -12,6 +12,10 @@ services:
       - CIPHRCHAT_RELAY_QUIC_PORT=4001
       - CIPHRCHAT_FILES_DIRECTORY=/var/lib/ciphrchat/files
       - CIPHRCHAT_MAILBOX_DIRECTORY=/var/lib/ciphrchat/mailbox
+      - CIPHRCHAT_FILE_STORAGE_QUOTA_BYTES=${CIPHRCHAT_FILE_STORAGE_QUOTA_BYTES:-53687091200}
+      - TURN_STATIC_AUTH_SECRET=${TURN_STATIC_AUTH_SECRET:-}
+      - TURN_PUBLIC_URL=${TURN_PUBLIC_URL:-turn:127.0.0.1:3478}
+      - TURN_CREDENTIAL_TTL_SECONDS=${TURN_CREDENTIAL_TTL_SECONDS:-600}
     volumes:
       - relay-data:/var/lib/ciphrchat
     restart: unless-stopped
@@ -24,9 +28,15 @@ services:
       - "5349:5349/tcp"
       - "5349:5349/udp"
       - "49152-49200:49152-49200/udp"
+    environment:
+      - TURN_REALM=${TURN_REALM:-ciphrchat.internal}
+      - TURN_STATIC_AUTH_SECRET=${TURN_STATIC_AUTH_SECRET:-}
     volumes:
       - ../coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-    command: ["-c", "/etc/coturn/turnserver.conf"]
+    command: >
+      sh -c 'turnserver -c /etc/coturn/turnserver.conf
+      --static-auth-secret="$$TURN_STATIC_AUTH_SECRET"
+      --realm="$$TURN_REALM"'
     restart: unless-stopped
 
 volumes:

@@ -3,27 +3,28 @@ package org.ciphrchat.app.calling
 import android.content.Context
 import android.media.AudioManager
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import org.ciphrchat.app.BuildConfig
 import org.ciphrchat.app.privacy.PrivacyManager
+import org.json.JSONObject
 import org.webrtc.*
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Manages real audio-only WebRTC calls with Opus codec, weak-network resilience (DTX/FEC),
- * dynamic Coturn TURN/STUN configuration, and relay-only ICE privacy mode.
+ * ephemeral TURN REST credentials, and relay-only ICE privacy mode.
  */
 @Singleton
 class AudioCallManager @Inject constructor(
@@ -71,35 +72,81 @@ class AudioCallManager @Inject constructor(
     }
 
     /**
-     * Builds list of ICE servers dynamically from BuildConfig / deployment environment.
+     * Fetches short-lived ephemeral TURN REST credentials from the bootstrap relay service.
      */
-    fun getIceServers(): List<PeerConnection.IceServer> {
-        val servers = mutableListOf<PeerConnection.IceServer>()
-        val turnUrl = BuildConfig.CIPHRCHAT_TURN_URL
-        val username = BuildConfig.CIPHRCHAT_TURN_USERNAME
-        val credential = BuildConfig.CIPHRCHAT_TURN_CREDENTIAL
+    suspend fun fetchTurnCredentials(userId: String): PeerConnection.IceServer? = withContext(Dispatchers.IO) {
+        runCatching {
+            val endpointUrl = when {
+                BuildConfig.CIPHRCHAT_TURN_CREDENTIAL_URL.isNotBlank() -> BuildConfig.CIPHRCHAT_TURN_CREDENTIAL_URL
+                BuildConfig.CIPHRCHAT_RELAY_ADDRESS.isNotBlank() -> {
+                    val base = BuildConfig.CIPHRCHAT_RELAY_ADDRESS.removePrefix("http://").removePrefix("https://")
+                    "http://$base/turn/credentials"
+                }
+                else -> "http://127.0.0.1:18081/turn/credentials"
+            }
 
-        if (turnUrl.isNotBlank()) {
-            val builder = PeerConnection.IceServer.builder(turnUrl)
-            if (username.isNotBlank()) builder.setUsername(username)
-            if (credential.isNotBlank()) builder.setPassword(credential)
-            servers.add(builder.createIceServer())
+            val url = URL(endpointUrl)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.doOutput = true
+
+            val body = JSONObject().put("username", userId).toString()
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+
+            if (connection.responseCode in 200..299) {
+                val responseText = connection.inputStream.use { stream ->
+                    BufferedReader(InputStreamReader(stream)).readText()
+                }
+                val json = JSONObject(responseText)
+                val turnUrl = json.getString("turn_url")
+                val username = json.getString("username")
+                val credential = json.getString("credential")
+
+                PeerConnection.IceServer.builder(turnUrl)
+                    .setUsername(username)
+                    .setPassword(credential)
+                    .createIceServer()
+            } else {
+                null
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Builds list of ICE servers dynamically using short-lived TURN credentials.
+     */
+    suspend fun getIceServers(userId: String): List<PeerConnection.IceServer> {
+        val servers = mutableListOf<PeerConnection.IceServer>()
+
+        // 1. Fetch short-lived REST credentials from server
+        val ephemeralServer = fetchTurnCredentials(userId)
+        if (ephemeralServer != null) {
+            servers.add(ephemeralServer)
         }
 
-        // Standard fallback STUN servers if TURN URL is not explicitly configured
-        if (servers.isEmpty()) {
+        // 2. Add fallback STUN server only if IP privacy is OFF
+        val isPrivacyOn = privacyManager.isIpPrivacyEnabled.value
+        if (!isPrivacyOn) {
             servers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         }
+
         return servers
     }
 
     /**
      * Creates and configures real PeerConnection with audio track and ICE constraints.
      */
-    private fun createPeerConnection(callId: String): PeerConnection? {
+    private fun createPeerConnection(callId: String, iceServers: List<PeerConnection.IceServer>): PeerConnection? {
         val factory = peerConnectionFactory ?: return null
-        val iceServers = getIceServers()
         val isPrivacyOn = privacyManager.isIpPrivacyEnabled.value
+
+        if (isPrivacyOn && iceServers.none { it.urls.any { url -> url.startsWith("turn:") || url.startsWith("turns:") } }) {
+            // In Privacy Mode, a valid TURN server is strictly required to protect user IP
+            return null
+        }
 
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -204,40 +251,43 @@ class AudioCallManager @Inject constructor(
         _callState.value = CallState.OutgoingRinging(callId, contactId, contactName)
         setupAudio(speaker = false)
 
-        val pc = createPeerConnection(callId)
-        if (pc == null) {
-            _callState.value = CallState.Failed(callId, "Calling service unavailable (WebRTC init error)")
-            return callId
-        }
-
-        val mediaConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
-        }
-
-        pc.createOffer(object : SdpObserver {
-            override fun onCreateSuccess(desc: SessionDescription?) {
-                if (desc == null) return
-                pc.setLocalDescription(object : SdpObserver {
-                    override fun onSetSuccess() {
-                        val offerSignal = CallSignal.Offer(callId, desc.description, localSenderId, contactId)
-                        _outgoingSignals.tryEmit(offerSignal)
-                    }
-                    override fun onSetFailure(error: String?) {
-                        endCall("Failed to set local description: $error")
-                    }
-                    override fun onCreateSuccess(p0: SessionDescription?) {}
-                    override fun onCreateFailure(p0: String?) {}
-                }, desc)
+        scope.launch {
+            val iceServers = getIceServers(localSenderId)
+            val pc = createPeerConnection(callId, iceServers)
+            if (pc == null) {
+                _callState.value = CallState.Failed(callId, "Calling service unavailable (TURN required for IP privacy)")
+                return@launch
             }
 
-            override fun onCreateFailure(error: String?) {
-                endCall("Failed to create offer: $error")
+            val mediaConstraints = MediaConstraints().apply {
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
             }
 
-            override fun onSetSuccess() {}
-            override fun onSetFailure(p0: String?) {}
-        }, mediaConstraints)
+            pc.createOffer(object : SdpObserver {
+                override fun onCreateSuccess(desc: SessionDescription?) {
+                    if (desc == null) return
+                    pc.setLocalDescription(object : SdpObserver {
+                        override fun onSetSuccess() {
+                            val offerSignal = CallSignal.Offer(callId, desc.description, localSenderId, contactId)
+                            _outgoingSignals.tryEmit(offerSignal)
+                        }
+                        override fun onSetFailure(error: String?) {
+                            endCall("Failed to set local description: $error")
+                        }
+                        override fun onCreateSuccess(p0: SessionDescription?) {}
+                        override fun onCreateFailure(p0: String?) {}
+                    }, desc)
+                }
+
+                override fun onCreateFailure(error: String?) {
+                    endCall("Failed to create offer: $error")
+                }
+
+                override fun onSetSuccess() {}
+                override fun onSetFailure(p0: String?) {}
+            }, mediaConstraints)
+        }
 
         // 30-second ringing timeout
         timeoutJob?.cancel()
@@ -271,10 +321,8 @@ class AudioCallManager @Inject constructor(
             sdpOffer = offer.sdp
         )
 
-        // Send Ringing response
         _outgoingSignals.tryEmit(CallSignal.Ringing(offer.callId, offer.recipientId, offer.senderId))
 
-        // 30-second incoming ringing timeout
         timeoutJob?.cancel()
         timeoutJob = scope.launch {
             delay(30_000)
@@ -295,50 +343,53 @@ class AudioCallManager @Inject constructor(
         _callState.value = CallState.Connecting(current.callId, current.contactId, current.contactName)
         setupAudio(speaker = false)
 
-        val pc = createPeerConnection(current.callId)
-        if (pc == null) {
-            endCall("WebRTC engine unavailable")
-            return
-        }
+        scope.launch {
+            val iceServers = getIceServers(localSenderId)
+            val pc = createPeerConnection(current.callId, iceServers)
+            if (pc == null) {
+                endCall("Calling service unavailable (TURN required for IP privacy)")
+                return@launch
+            }
 
-        val remoteDesc = SessionDescription(SessionDescription.Type.OFFER, current.sdpOffer)
-        pc.setRemoteDescription(object : SdpObserver {
-            override fun onSetSuccess() {
-                val mediaConstraints = MediaConstraints().apply {
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            val remoteDesc = SessionDescription(SessionDescription.Type.OFFER, current.sdpOffer)
+            pc.setRemoteDescription(object : SdpObserver {
+                override fun onSetSuccess() {
+                    val mediaConstraints = MediaConstraints().apply {
+                        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                    }
+
+                    pc.createAnswer(object : SdpObserver {
+                        override fun onCreateSuccess(answerDesc: SessionDescription?) {
+                            if (answerDesc == null) return
+                            pc.setLocalDescription(object : SdpObserver {
+                                override fun onSetSuccess() {
+                                    val answerSignal = CallSignal.Answer(current.callId, answerDesc.description, localSenderId, current.contactId)
+                                    _outgoingSignals.tryEmit(answerSignal)
+                                }
+                                override fun onSetFailure(error: String?) {
+                                    endCall("Failed to set local answer: $error")
+                                }
+                                override fun onCreateSuccess(p0: SessionDescription?) {}
+                                override fun onCreateFailure(p0: String?) {}
+                            }, answerDesc)
+                        }
+                        override fun onCreateFailure(error: String?) {
+                            endCall("Failed to create answer: $error")
+                        }
+                        override fun onSetSuccess() {}
+                        override fun onSetFailure(p0: String?) {}
+                    }, mediaConstraints)
                 }
 
-                pc.createAnswer(object : SdpObserver {
-                    override fun onCreateSuccess(answerDesc: SessionDescription?) {
-                        if (answerDesc == null) return
-                        pc.setLocalDescription(object : SdpObserver {
-                            override fun onSetSuccess() {
-                                val answerSignal = CallSignal.Answer(current.callId, answerDesc.description, localSenderId, current.contactId)
-                                _outgoingSignals.tryEmit(answerSignal)
-                            }
-                            override fun onSetFailure(error: String?) {
-                                endCall("Failed to set local answer: $error")
-                            }
-                            override fun onCreateSuccess(p0: SessionDescription?) {}
-                            override fun onCreateFailure(p0: String?) {}
-                        }, answerDesc)
-                    }
-                    override fun onCreateFailure(error: String?) {
-                        endCall("Failed to create answer: $error")
-                    }
-                    override fun onSetSuccess() {}
-                    override fun onSetFailure(p0: String?) {}
-                }, mediaConstraints)
-            }
+                override fun onSetFailure(error: String?) {
+                    endCall("Failed to set remote offer: $error")
+                }
 
-            override fun onSetFailure(error: String?) {
-                endCall("Failed to set remote offer: $error")
-            }
-
-            override fun onCreateSuccess(p0: SessionDescription?) {}
-            override fun onCreateFailure(p0: String?) {}
-        }, remoteDesc)
+                override fun onCreateSuccess(p0: SessionDescription?) {}
+                override fun onCreateFailure(p0: String?) {}
+            }, remoteDesc)
+        }
     }
 
     /**
@@ -364,9 +415,7 @@ class AudioCallManager @Inject constructor(
             val pc = peerConnection ?: return
             val remoteDesc = SessionDescription(SessionDescription.Type.ANSWER, answer.sdp)
             pc.setRemoteDescription(object : SdpObserver {
-                override fun onSetSuccess() {
-                    // Note: connected transition will occur via PeerConnection.Observer onIceConnectionChange
-                }
+                override fun onSetSuccess() {}
                 override fun onSetFailure(error: String?) {
                     endCall("Failed to set remote answer: $error")
                 }

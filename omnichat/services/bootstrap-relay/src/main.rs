@@ -645,6 +645,200 @@ async fn delete_file_handler(
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
 }
 
+// -------------------------------------------------------------------------------------------------
+// Ephemeral TURN REST Credentials (RFC 2104 / Coturn REST API)
+// -------------------------------------------------------------------------------------------------
+
+fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h0: u32 = 0x67452301;
+    let mut h1: u32 = 0xEFCDAB89;
+    let mut h2: u32 = 0x98BADCFE;
+    let mut h3: u32 = 0x10325476;
+    let mut h4: u32 = 0xC3D2E1F0;
+
+    let ml = (data.len() as u64) * 8;
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while (msg.len() % 64) != 56 {
+        msg.push(0x00);
+    }
+    msg.extend_from_slice(&ml.to_be_bytes());
+
+    for chunk in msg.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+
+        let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);
+        for i in 0..80 {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A827999),
+                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+                _ => (b ^ c ^ d, 0xCA62C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    out[0..4].copy_from_slice(&h0.to_be_bytes());
+    out[4..8].copy_from_slice(&h1.to_be_bytes());
+    out[8..12].copy_from_slice(&h2.to_be_bytes());
+    out[12..16].copy_from_slice(&h3.to_be_bytes());
+    out[16..20].copy_from_slice(&h4.to_be_bytes());
+    out
+}
+
+pub fn hmac_sha1(key: &[u8], message: &[u8]) -> [u8; 20] {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        let hash = sha1(key);
+        k[..20].copy_from_slice(&hash);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+
+    let mut o_key_pad = [0x5cu8; 64];
+    let mut i_key_pad = [0x36u8; 64];
+    for i in 0..64 {
+        o_key_pad[i] ^= k[i];
+        i_key_pad[i] ^= k[i];
+    }
+
+    let mut inner_input = Vec::with_capacity(64 + message.len());
+    inner_input.extend_from_slice(&i_key_pad);
+    inner_input.extend_from_slice(message);
+    let inner_hash = sha1(&inner_input);
+
+    let mut outer_input = Vec::with_capacity(64 + 20);
+    outer_input.extend_from_slice(&o_key_pad);
+    outer_input.extend_from_slice(&inner_hash);
+    sha1(&outer_input)
+}
+
+pub fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+
+        result.push(TABLE[(b0 >> 2) as usize] as char);
+        result.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(TABLE[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(TABLE[(b2 & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TurnCredentialsRequest {
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TurnCredentialsResponse {
+    pub turn_url: String,
+    pub username: String,
+    pub credential: String,
+    pub expires_at_epoch_sec: u64,
+}
+
+pub fn generate_turn_credentials(
+    secret: &str,
+    public_url: &str,
+    ttl_seconds: u64,
+    user_id: &str,
+) -> anyhow::Result<TurnCredentialsResponse> {
+    anyhow::ensure!(!secret.trim().is_empty(), "TURN static secret is not configured");
+    let now_sec = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let expires_at = now_sec + ttl_seconds;
+
+    let clean_user: String = user_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(32)
+        .collect();
+    let effective_user = if clean_user.is_empty() { "ciphr_user" } else { &clean_user };
+    let turn_username = format!("{expires_at}:{effective_user}");
+
+    let hmac_bytes = hmac_sha1(secret.as_bytes(), turn_username.as_bytes());
+    let credential = base64_encode(&hmac_bytes);
+
+    Ok(TurnCredentialsResponse {
+        turn_url: public_url.to_string(),
+        username: turn_username,
+        credential,
+        expires_at_epoch_sec: expires_at,
+    })
+}
+
+async fn turn_credentials_handler(
+    State(_state): State<AppState>,
+    body: Option<Json<TurnCredentialsRequest>>,
+) -> Result<Json<TurnCredentialsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let secret = env::var("TURN_STATIC_AUTH_SECRET").unwrap_or_default();
+    if secret.trim().is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
+        ));
+    }
+
+    let turn_url = env::var("TURN_PUBLIC_URL")
+        .unwrap_or_else(|_| "turn:relay.ciphrchat.org:3478".to_string());
+    let ttl_seconds: u64 = env::var("TURN_CREDENTIAL_TTL_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600);
+
+    let user_id = body
+        .as_ref()
+        .and_then(|Json(r)| r.username.as_deref())
+        .unwrap_or("ciphr_user");
+
+    generate_turn_credentials(&secret, &turn_url, ttl_seconds, user_id)
+        .map(Json)
+        .map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "TURN authentication service unavailable" })),
+            )
+        })
+}
+
 #[derive(NetworkBehaviour)]
 struct RelayBehaviour {
     relay: relay::Behaviour,
@@ -747,6 +941,8 @@ async fn run_http_server(
             "/info",
             get(|State(state): State<AppState>| async move { Json(state.info) }),
         )
+        .route("/turn/credentials", post(turn_credentials_handler).get(turn_credentials_handler))
+        .route("/ciphrchat/turn-credentials/1", post(turn_credentials_handler).get(turn_credentials_handler))
         .route("/files/init", post(init_file_handler))
         .route(
             "/files/upload/{file_id}/{chunk_index}",
@@ -1064,5 +1260,34 @@ mod tests {
             .is_err());
 
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn test_hmac_sha1_rfc2202_test_vector() {
+        let key = b"Jefe";
+        let data = b"what do ya want for nothing?";
+        let hmac = hmac_sha1(key, data);
+        let b64 = base64_encode(&hmac);
+        assert_eq!(b64, "7/zfauXrL6LSdBbV8YTfnCWafHk=");
+    }
+
+    #[test]
+    fn test_turn_rest_credential_generation() {
+        let secret = "test_turn_auth_secret_12345";
+        let public_url = "turn:relay.ciphrchat.org:3478";
+        let ttl = 600u64;
+        let creds = generate_turn_credentials(secret, public_url, ttl, "alice").unwrap();
+
+        assert_eq!(creds.turn_url, public_url);
+        assert!(creds.username.ends_with(":alice"));
+        assert!(!creds.credential.is_empty());
+        assert!(!creds.credential.contains(secret));
+        assert!(creds.expires_at_epoch_sec > 0);
+    }
+
+    #[test]
+    fn test_turn_credentials_missing_secret_fails() {
+        let res = generate_turn_credentials("", "turn:relay.ciphrchat.org:3478", 600, "alice");
+        assert!(res.is_err());
     }
 }

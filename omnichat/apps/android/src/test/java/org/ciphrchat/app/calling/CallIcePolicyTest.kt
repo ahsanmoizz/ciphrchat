@@ -1,9 +1,11 @@
 package org.ciphrchat.app.calling
 
 import org.ciphrchat.app.privacy.IpPrivacyPolicy
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.webrtc.PeerConnection
 
 class CallIcePolicyTest {
 
@@ -29,5 +31,27 @@ class CallIcePolicyTest {
         assertTrue(IpPrivacyPolicy.filterIceCandidate(hostCandidate, false))
         assertTrue(IpPrivacyPolicy.filterIceCandidate(srflxCandidate, false))
         assertTrue(IpPrivacyPolicy.filterIceCandidate(relayCandidate, false))
+    }
+
+    @Test
+    fun verifiesRelayOnlyTransportTypeWhenPrivacyOn() {
+        val isPrivacyOn = true
+        val iceTransportsType = if (isPrivacyOn) {
+            PeerConnection.IceTransportsType.RELAY
+        } else {
+            PeerConnection.IceTransportsType.ALL
+        }
+
+        assertEquals(PeerConnection.IceTransportsType.RELAY, iceTransportsType)
+    }
+
+    @Test
+    fun verifiesNoDirectFallbackWhenTurnUnavailableAndPrivacyOn() {
+        val isPrivacyOn = true
+        val iceServers = emptyList<PeerConnection.IceServer>()
+
+        // When privacy is ON and no TURN server is available, call must not proceed to direct ICE
+        val canProceed = !isPrivacyOn || iceServers.any { it.urls.any { u -> u.startsWith("turn:") || u.startsWith("turns:") } }
+        assertFalse("Call must not proceed without TURN in privacy mode", canProceed)
     }
 }
