@@ -1,87 +1,93 @@
-name: Android CI
+﻿name: CiphrChat Mobile Candidate
 
 permissions:
   contents: write
 
 on:
   push:
-    branches: [ "main", "feature/**", "release/**" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - "release/mobile-test-*"
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-    - name: set up JDK 17
-      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: gradle
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: gradle
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      with:
-        targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
 
-    - name: Install cargo-ndk
-      run: cargo install cargo-ndk
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x omnichat/gradlew
+      - name: Make Gradle executable
+        run: chmod +x omnichat/gradlew
 
-    - name: Build Debug APK
-      working-directory: ./omnichat
-      env:
-        CIPHRCHAT_RELAY_ADDRESS: ${{ vars.CIPHRCHAT_RELAY_ADDRESS }}
-      run: ./gradlew assembleDebug -PbuildRust
+      - name: Build configured APK
+        working-directory: ./omnichat
+        env:
+          CIPHRCHAT_RELAY_ADDRESS: /ip4/95.217.129.142/tcp/4001/p2p/12D3KooWM2ozoxmiwqqD1qXPMjy6AW14vDePisSn2MdMMCgWsoHE
+          CIPHRCHAT_FILE_RELAY_HTTP_URL: https://tips-dark-extraction-logan.trycloudflare.com
+          CIPHRCHAT_TURN_URL: turn:95.217.129.142:3478
+          CIPHRCHAT_TURN_CREDENTIAL_URL: https://tips-dark-extraction-logan.trycloudflare.com/turn/credentials
+          CIPHRCHAT_BLOCKCHAIN_RPC_URL: ""
+          CIPHRCHAT_REGISTRY_CONTRACT_ADDRESS: ""
+        run: ./gradlew assembleDebug -PbuildRust
 
-    - name: Verify APK before publishing
-      working-directory: ./omnichat
-      run: |
-        APK="apps/android/build/outputs/apk/debug/android-debug.apk"
-        test -s "$APK"
-        unzip -t "$APK"
-        APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
-        "$APKSIGNER" verify --verbose "$APK"
-        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest min-sdk "$APK"
-        "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "$APK"
-        sha256sum "$APK" | tee "$APK.sha256"
+      - name: Verify APK
+        working-directory: ./omnichat
+        run: |
+          APK="apps/android/build/outputs/apk/debug/android-debug.apk"
 
-    - name: Run Lint
-      working-directory: ./omnichat
-      run: ./gradlew lint
+          test -s "$APK"
+          unzip -t "$APK"
 
-    - name: Run Android unit tests
-      working-directory: ./omnichat
-      run: ./gradlew testDebugUnitTest
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --verbose "$APK"
 
-    - name: Upload APK
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: app-debug
-        path: |
-          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk
-          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256
+          "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "$APK"
 
-    - name: Publish latest APK release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        gh release view latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
-          gh release create latest \
+          sha256sum "$APK" | tee "$APK.sha256"
+
+      - name: Run Android tests
+        working-directory: ./omnichat
+        run: |
+          ./gradlew lint
+          ./gradlew testDebugUnitTest
+
+      - name: Upload GitHub artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: CiphrChat-mobile-candidate
+          path: |
+            omnichat/apps/android/build/outputs/apk/debug/android-debug.apk
+            omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256
+
+      - name: Publish separate candidate download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="candidate-935172d"
+
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "CiphrChat Mobile Candidate" \
+              --notes "Test candidate. Blockchain disabled. Existing latest release remains untouched."
+
+          gh release upload "$TAG" \
+            omnichat/apps/android/build/outputs/apk/debug/android-debug.apk \
+            omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256 \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Latest Android build" \
-            --notes "Download the latest CiphrChat Android development build." \
-            --prerelease
-        gh release upload latest \
-          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk \
-          omnichat/apps/android/build/outputs/apk/debug/android-debug.apk.sha256 \
-          --repo "$GITHUB_REPOSITORY" \
-          --clobber
+            --clobber
