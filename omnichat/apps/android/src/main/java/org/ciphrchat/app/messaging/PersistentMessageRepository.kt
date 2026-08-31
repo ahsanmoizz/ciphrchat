@@ -374,7 +374,8 @@ class PersistentMessageRepository @Inject constructor(
         attachmentFileName = attachmentFileName,
         attachmentMimeType = attachmentMimeType,
         attachmentStoragePath = attachmentStoragePath,
-        attachmentSizeBytes = attachmentSizeBytes
+        attachmentSizeBytes = attachmentSizeBytes,
+        attachmentSha256 = attachmentSha256
     )
 
     private fun decryptBody(entity: MessageEntity): String = runCatching {
@@ -723,11 +724,19 @@ class PersistentMessageRepository @Inject constructor(
             context.contentResolver.openFileDescriptor(uri, "r")?.use {
                 it.statSize
             }
-        }.getOrNull()?.takeIf { it > 0 } ?: runCatching {
-            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-            }
-        }.getOrDefault(0L)
+        }.getOrNull()?.takeIf { it > 0 }
+            ?: runCatching {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(android.provider.OpenableColumns.SIZE),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+                }
+            }.getOrNull()
+            ?: 0L
     }
 
     private fun getUriFileName(uri: Uri): String {
