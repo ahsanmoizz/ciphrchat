@@ -8,10 +8,7 @@ class RelayAddressResolverTest {
 
     @Test
     fun fallsBackToStaticRelayWhenBlockchainIsEmptyOrUnavailable() {
-        val fakeService = object : BlockchainRegistryService() {
-            // Returns empty list simulating unavailable or unconfigured registry contract
-        }
-        val resolver = RelayAddressResolver(fakeService)
+        val resolver = RelayAddressResolver(BlockchainRegistryService())
 
         val resolved = kotlinx.coroutines.runBlocking {
             resolver.resolveRelayAddress()
@@ -23,9 +20,6 @@ class RelayAddressResolverTest {
 
     @Test
     fun selectsActiveDiscoveredRelayWithHighestCapacity() {
-        val fakeService = object : BlockchainRegistryService() {
-            // Simulate discovered relays on Base Sepolia
-        }
         // Test selection logic directly
         val relays = listOf(
             RelayDiscoveryParser.DiscoveredRelay(
