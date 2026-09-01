@@ -64,10 +64,14 @@ class PersistentMessageRepository @Inject constructor(
 
     private val dao = database.messageDao()
     private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val outboxScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val activeInFlightMessages = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val outboxSignal = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 64)
 
     init {
         networkScope.launch {
             dao.requeueFailedMessages()
+            triggerOutboxFlush()
             if (dao.getMessagesPendingDelivery().isNotEmpty()) retryScheduler.scheduleNow()
         }
         networkScope.launch {
@@ -83,6 +87,25 @@ class PersistentMessageRepository @Inject constructor(
                     is RustNetworkEvent.DeliveryFailed -> updateDelivery(event.messageId, MessageStatus.QUEUED)
                     else -> Unit
                 }
+            }
+        }
+        networkScope.launch {
+            p2p.mailboxReady.collect { isReady ->
+                if (isReady) {
+                    triggerOutboxFlush()
+                }
+            }
+        }
+        networkScope.launch {
+            p2p.relayReservationReady.collect { isReady ->
+                if (isReady) {
+                    triggerOutboxFlush()
+                }
+            }
+        }
+        outboxScope.launch {
+            outboxSignal.collect {
+                processOutbox()
             }
         }
         networkScope.launch {
@@ -121,6 +144,106 @@ class PersistentMessageRepository @Inject constructor(
 
     /** The repository starts its collectors during construction; this documents eager startup. */
     fun ensureStarted() = Unit
+
+    fun triggerOutboxFlush() {
+        outboxSignal.tryEmit(Unit)
+    }
+
+    suspend fun flushPendingOutbox(): Boolean = withContext(Dispatchers.IO) {
+        processOutbox()
+    }
+
+    private suspend fun processOutbox(): Boolean {
+        val pending = dao.getMessagesPendingDelivery()
+        if (pending.isEmpty()) return true
+
+        var allDeliveredOrSent = true
+        for (message in pending) {
+            if (!activeInFlightMessages.add(message.id)) {
+                continue
+            }
+            outboxScope.launch {
+                try {
+                    val success = dispatchSingleOutboxMessage(message)
+                    if (!success) {
+                        allDeliveredOrSent = false
+                    }
+                } finally {
+                    activeInFlightMessages.remove(message.id)
+                }
+            }
+        }
+        return allDeliveredOrSent
+    }
+
+    private suspend fun dispatchSingleOutboxMessage(message: MessageEntity): Boolean {
+        val dispatchStart = System.currentTimeMillis()
+        MessageTimingTracker.recordDispatch(message.id, dispatchStart - message.createdAtEpochMs)
+
+        val fresh = dao.findById(message.id) ?: return true
+        if (fresh.status == MessageStatus.DELIVERED) return true
+
+        if (fresh.encryptedPayload.isEmpty()) {
+            dao.updateMessage(fresh.copy(status = MessageStatus.FAILED))
+            return false
+        }
+
+        val senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+        val envelope = OutboundEnvelope(
+            protocolVersion = 2,
+            messageId = fresh.id,
+            recipientId = fresh.recipientId,
+            senderId = fresh.senderId,
+            createdAtEpochMs = fresh.createdAtEpochMs,
+            expiresAtEpochMs = fresh.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
+            hopLimit = 3,
+            encryptedPayload = fresh.encryptedPayload,
+            testOnly = false,
+            senderInvitation = senderInvitation
+        )
+
+        if (fresh.status == MessageStatus.QUEUED) {
+            dao.updateMessage(fresh.copy(status = MessageStatus.ROUTING))
+        }
+
+        val routeStart = System.currentTimeMillis()
+        val sendResult = router.route(envelope)
+        val routeDuration = System.currentTimeMillis() - routeStart
+        MessageTimingTracker.recordRoute(fresh.id, sendResult.javaClass.simpleName, routeDuration, sendResult.toString())
+
+        val current = dao.findById(fresh.id) ?: return false
+        if (current.status == MessageStatus.DELIVERED) return true
+
+        val updated = when (sendResult) {
+            is SendResult.Accepted -> {
+                MessageTimingTracker.recordRelayAccepted(fresh.id, System.currentTimeMillis() - fresh.createdAtEpochMs)
+                current.copy(
+                    status = DeliveryStatusPolicy.merge(
+                        current.status,
+                        DeliveryStatusPolicy.statusFor(sendResult)
+                    ),
+                    selectedTransport = sendResult.transport.name
+                )
+            }
+            else -> {
+                current.copy(
+                    status = DeliveryStatusPolicy.merge(
+                        current.status,
+                        DeliveryStatusPolicy.statusFor(sendResult)
+                    )
+                )
+            }
+        }
+
+        dao.updateMessage(updated)
+        if (updated.status == MessageStatus.QUEUED ||
+            (updated.status == MessageStatus.SENT && updated.selectedTransport == "INTERNET_DIRECT")
+        ) {
+            retryScheduler.schedule()
+            return false
+        }
+        return true
+    }
 
     override fun conversations(): Flow<List<ConversationSummary>> = combine(
         dao.getAllMessages(),
@@ -188,8 +311,6 @@ class PersistentMessageRepository @Inject constructor(
             }
 
             if (fileSize > AttachmentStore.MAX_ATTACHMENT_BYTES) {
-                // > 5 MiB: Zero-retention large-file streaming transit path
-                // Retain persistable URI permission where supported for resumable reads
                 runCatching {
                     context.contentResolver.takePersistableUriPermission(
                         uri,
@@ -209,9 +330,6 @@ class PersistentMessageRepository @Inject constructor(
                     recipientId = contact.contactId
                 ).getOrThrow()
 
-                // Sender waits for receiver READY signal before streaming chunks.
-
-                // Send Signal-encrypted message containing ONLY the descriptor metadata and per-file key
                 sendContent(
                     conversationId = conversationId,
                     recipientId = recipientId,
@@ -225,7 +343,6 @@ class PersistentMessageRepository @Inject constructor(
                     attachmentSha256 = descriptor.sha256
                 )
             } else {
-                // <= 5 MiB: Existing small attachment legacy path
                 val input = attachmentStore.read(uri)
                 require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
                 val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
@@ -268,7 +385,6 @@ class PersistentMessageRepository @Inject constructor(
             return@withContext null
         }
 
-        // Send resume request with missing chunks to sender
         val missing = largeFileManager.getLocalMissingChunks(destinationFile, descriptor.totalChunks)
         sendFileControlMessage(descriptor.senderId, FileTransferControl.Resume(descriptor.fileId, missing))
 
@@ -301,13 +417,17 @@ class PersistentMessageRepository @Inject constructor(
         attachmentSizeBytes: Long = 0L,
         attachmentSha256: String? = null
     ): ChatMessage {
+        val messageId = UUID.randomUUID().toString()
+
+        val encryptStart = System.currentTimeMillis()
         val ciphertext = sessions.encryptMessage(address, plaintext)
+        val encryptDuration = System.currentTimeMillis() - encryptStart
+        MessageTimingTracker.recordEncrypt(messageId, encryptDuration)
+
         val localIdentity = identity.current()?.publicId ?: error("Local identity is unavailable")
-        val senderInvitation = invitationService.createInvitation().getOrElse {
-            throw IllegalStateException("Could not prepare your secure sender identity", it)
-        }
+
         val entity = MessageEntity(
-            id = UUID.randomUUID().toString(),
+            id = messageId,
             conversationId = conversationId,
             senderId = localIdentity,
             recipientId = recipientId,
@@ -323,42 +443,16 @@ class PersistentMessageRepository @Inject constructor(
             attachmentSizeBytes = attachmentSizeBytes,
             attachmentSha256 = attachmentSha256
         )
-        dao.insertMessage(entity)
 
-        val envelope = OutboundEnvelope(
-            protocolVersion = 2,
-            messageId = entity.id,
-            recipientId = recipientId,
-            senderId = localIdentity,
-            createdAtEpochMs = entity.createdAtEpochMs,
-            expiresAtEpochMs = entity.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
-            hopLimit = 3,
-            encryptedPayload = ciphertext.serialize(),
-            testOnly = false,
-            senderInvitation = senderInvitation
-        )
-        val sendResult = router.route(envelope)
-        val persisted = dao.findById(entity.id) ?: entity
-        val finalEntity = when (sendResult) {
-            is SendResult.Accepted -> persisted.copy(
-                status = DeliveryStatusPolicy.merge(
-                    persisted.status,
-                    DeliveryStatusPolicy.statusFor(sendResult)
-                ),
-                selectedTransport = sendResult.transport.name
-            )
-            else -> persisted.copy(
-                status = DeliveryStatusPolicy.merge(
-                    persisted.status,
-                    DeliveryStatusPolicy.statusFor(sendResult)
-                )
-            )
-        }
-        dao.updateMessage(finalEntity)
-        if (finalEntity.status == MessageStatus.QUEUED ||
-            finalEntity.status == MessageStatus.SENT && finalEntity.selectedTransport == "INTERNET_DIRECT"
-        ) retryScheduler.schedule()
-        return finalEntity.toModel()
+        val persistStart = System.currentTimeMillis()
+        dao.insertMessage(entity)
+        val persistDuration = System.currentTimeMillis() - persistStart
+        MessageTimingTracker.recordPersist(messageId, persistDuration)
+
+        // Asynchronously dispatch via Outbox without blocking foreground UI
+        triggerOutboxFlush()
+
+        return entity.toModel()
     }
 
     private fun MessageEntity.toModel() = ChatMessage(
@@ -384,6 +478,7 @@ class PersistentMessageRepository @Inject constructor(
 
     private suspend fun receive(peerId: String, wirePayload: ByteArray): Boolean =
         runCatching {
+            val receiveStart = System.currentTimeMillis()
             val envelope = JSONObject(wirePayload.toString(Charsets.UTF_8))
             val localId = identity.current()?.publicId ?: error("Local identity is unavailable")
             require(envelope.optInt("protocolVersion", 0) in 1..2) { "Unsupported Internet envelope version" }
@@ -418,11 +513,14 @@ class PersistentMessageRepository @Inject constructor(
             }
             val plaintext = sessions.decryptSerializedMessage(address, ciphertext)
             persistIncoming(messageId, contact.contactId, ciphertext, plaintext, createdAt, "INTERNET_DIRECT")
+            val receiveDuration = System.currentTimeMillis() - receiveStart
+            MessageTimingTracker.recordReceive(messageId, receiveDuration)
             sendDeliveryReceipt(contact, messageId, localId)
             true
         }.getOrDefault(false)
 
     private suspend fun receiveDeliveryReceipt(peerId: String, localId: String, receipt: JSONObject) {
+        val receiptStart = System.currentTimeMillis()
         require(receipt.optString("recipientId") == localId) { "Delivery receipt recipient mismatch" }
         val contact = contacts.findByPeerId(peerId)
             ?: error("Delivery receipt came from an unknown peer")
@@ -432,6 +530,9 @@ class PersistentMessageRepository @Inject constructor(
         val message = dao.findById(messageId) ?: return
         require(message.recipientId == contact.contactId) { "Delivery receipt does not match the recipient" }
         dao.updateMessage(message.copy(status = MessageStatus.DELIVERED))
+        val receiptDuration = System.currentTimeMillis() - receiptStart
+        MessageTimingTracker.recordReceipt(messageId, receiptDuration)
+        MessageTimingTracker.recordDelivered(messageId, System.currentTimeMillis() - message.createdAtEpochMs)
     }
 
     private fun sendDeliveryReceipt(
@@ -441,7 +542,7 @@ class PersistentMessageRepository @Inject constructor(
     ) {
         if (contact.relayAddress.isBlank() || contact.peerId.startsWith("local:")) return
         if (!p2p.connectPeer(contact.peerId, contact.relayAddress)) return
-        p2p.sendControlMessage(
+        val receiptSent = p2p.sendControlMessage(
             peerId = contact.peerId,
             messageId = "receipt:$messageId",
             payload = InternetWireCodec.encodeDeliveryReceipt(
@@ -450,6 +551,9 @@ class PersistentMessageRepository @Inject constructor(
                 recipientId = contact.contactId
             )
         )
+        if (receiptSent) {
+            MessageTimingTracker.recordReceipt(messageId, 0L)
+        }
     }
 
     private suspend fun receiveLocal(
