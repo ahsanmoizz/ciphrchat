@@ -236,9 +236,7 @@ class PersistentMessageRepository @Inject constructor(
         }
 
         dao.updateMessage(updated)
-        if (updated.status == MessageStatus.QUEUED ||
-            (updated.status == MessageStatus.SENT && updated.selectedTransport == "INTERNET_DIRECT")
-        ) {
+        if (updated.status == MessageStatus.QUEUED) {
             retryScheduler.schedule()
             return false
         }

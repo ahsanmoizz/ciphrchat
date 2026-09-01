@@ -63,7 +63,7 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE status = :status")
     suspend fun getMessagesByStatus(status: MessageStatus): List<MessageEntity>
 
-    @Query("SELECT * FROM messages WHERE status = 'QUEUED' OR (status = 'SENT' AND selectedTransport = 'INTERNET_DIRECT')")
+    @Query("SELECT * FROM messages WHERE status = 'QUEUED' OR status = 'ROUTING' ORDER BY createdAtEpochMs ASC")
     suspend fun getMessagesPendingDelivery(): List<MessageEntity>
 
     @Query("UPDATE messages SET status = 'QUEUED' WHERE status = 'FAILED'")

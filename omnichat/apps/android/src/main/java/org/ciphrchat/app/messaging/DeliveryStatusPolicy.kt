@@ -12,6 +12,10 @@ object DeliveryStatusPolicy {
         SendResult.Success -> MessageStatus.QUEUED
     }
 
-    fun merge(current: MessageStatus, next: MessageStatus): MessageStatus =
-        if (current == MessageStatus.DELIVERED) MessageStatus.DELIVERED else next
+    fun merge(current: MessageStatus, next: MessageStatus): MessageStatus = when {
+        current == MessageStatus.DELIVERED -> MessageStatus.DELIVERED
+        current == MessageStatus.SENT && (next == MessageStatus.QUEUED || next == MessageStatus.ROUTING) -> MessageStatus.SENT
+        else -> next
+    }
 }
+

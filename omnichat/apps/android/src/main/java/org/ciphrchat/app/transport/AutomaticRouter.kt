@@ -1,5 +1,7 @@
 package org.ciphrchat.app.transport
 
+import kotlinx.coroutines.withTimeoutOrNull
+import org.ciphrchat.app.identity.ContactRepository
 import org.ciphrchat.app.privacy.IpPrivacyPolicy
 import org.ciphrchat.app.privacy.PrivacyManager
 import javax.inject.Inject
@@ -22,7 +24,8 @@ internal val DEFAULT_TRANSPORT_PRIORITY = listOf(
 class AutomaticRouter @Inject constructor(
     private val registry: TransportRegistry,
     private val capabilityDetector: AndroidCapabilityDetector,
-    private val privacyManager: PrivacyManager
+    private val privacyManager: PrivacyManager,
+    private val contacts: ContactRepository
 ) {
     // Ordinary Internet is the default. Nearby radios are resilient fallbacks
     // when the recipient or encrypted mailbox cannot be reached through the relay.
@@ -30,7 +33,34 @@ class AutomaticRouter @Inject constructor(
 
     suspend fun route(envelope: OutboundEnvelope): SendResult {
         val isIpPrivacyEnabled = privacyManager.isIpPrivacyEnabled.value
-        val adapters = priority
+        val contact = runCatching { contacts.find(envelope.recipientId) }.getOrNull()
+
+        val candidateKinds = when {
+            contact != null && contact.relayAddress.isNotBlank() && !contact.peerId.startsWith("local:") -> {
+                // Known Internet contact: prioritize Internet first, followed by local LAN/Bluetooth fallbacks
+                listOf(
+                    TransportKind.INTERNET_DIRECT,
+                    TransportKind.INTERNET_RELAY,
+                    TransportKind.WIFI_LAN,
+                    TransportKind.BLUETOOTH_DIRECT
+                )
+            }
+            contact != null && contact.peerId.startsWith("local:") -> {
+                // Direct local peer: prioritize nearby radios only
+                listOf(
+                    TransportKind.WIFI_LAN,
+                    TransportKind.BLUETOOTH_DIRECT,
+                    TransportKind.WIFI_DIRECT,
+                    TransportKind.WIFI_AWARE,
+                    TransportKind.BLUETOOTH_MESH,
+                    TransportKind.ULTRASOUND,
+                    TransportKind.NFC_PAIRING
+                )
+            }
+            else -> priority
+        }
+
+        val adapters = candidateKinds
             .filter { IpPrivacyPolicy.isTransportAllowed(it, isIpPrivacyEnabled) }
             .mapNotNull(registry::byKind)
         val failures = mutableListOf<String>()
@@ -58,9 +88,17 @@ class AutomaticRouter @Inject constructor(
                 failures += "${adapter.kind}: payload is too large for this transport"
                 continue
             }
-            when (adapter.canReach(envelope.recipientId)) {
+            val reachability = withTimeoutOrNull(2_000L) {
+                adapter.canReach(envelope.recipientId)
+            } ?: Reachability.Unknown
+
+            when (reachability) {
                 Reachability.Reachable, Reachability.DIRECT, Reachability.MESH_PATH -> {
-                    when (val result = adapter.send(envelope)) {
+                    val result = withTimeoutOrNull(12_000L) {
+                        adapter.send(envelope)
+                    } ?: SendResult.Failed(IllegalStateException("${adapter.kind} send timed out"))
+
+                    when (result) {
                         is SendResult.Accepted -> return result
                         is SendResult.Rejected -> failures += "${adapter.kind}: ${result.reason}"
                         is SendResult.Failed -> failures += "${adapter.kind}: ${result.error.message}"
@@ -69,7 +107,7 @@ class AutomaticRouter @Inject constructor(
                     }
                 }
                 Reachability.Unknown -> failures += "${adapter.kind}: reachability unknown"
-                is Reachability.Unreachable, Reachability.UNREACHABLE -> failures += "${adapter.kind}: unreachable"
+                else -> failures += "${adapter.kind}: unreachable"
             }
         }
 
@@ -82,3 +120,4 @@ class AutomaticRouter @Inject constructor(
         const val LARGE_PAYLOAD_THRESHOLD = 32 * 1024
     }
 }
+
