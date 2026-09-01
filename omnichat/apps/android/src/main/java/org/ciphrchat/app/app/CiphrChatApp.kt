@@ -274,9 +274,7 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
 
     LaunchedEffect(viewModel.restoreCompleted) {
         if (viewModel.restoreCompleted) {
-            navController.navigate(AppRoute.Chats.route) {
-                popUpTo(0) { inclusive = true }
-            }
+            navController.navigateTo(AppNavigationPolicy.onFinishOnboarding(isOnboarded = false))
         }
     }
 
@@ -288,8 +286,7 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         }
     }
 
-    val mainRoutes = setOf(AppRoute.Chats.route, AppRoute.Connect.route, AppRoute.Settings.route)
-    val showBottomBar = currentRoute in mainRoutes
+    val showBottomBar = AppNavigationPolicy.isBottomBarVisible(currentRoute)
 
     val startDest = if (viewModel.isOnboarded()) AppRoute.Chats.route else AppRoute.Welcome.route
 
@@ -298,10 +295,7 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         bottomBar = {
             if (showBottomBar) {
                 CiphrBottomBar(currentRoute = currentRoute) { item ->
-                    navController.navigate(item.route) {
-                        popUpTo(AppRoute.Chats.route) { saveState = true }
-                        launchSingleTop = true; restoreState = true
-                    }
+                    navController.navigateTo(AppNavigationPolicy.onBottomNavTabSelected(item))
                 }
             }
         }
@@ -336,17 +330,16 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                     fingerprint = id?.fingerprint ?: "0000-0000-0000-0000",
                     qrContent = viewModel.invitation,
                     onStartMessaging = {
+                        val wasOnboarded = viewModel.isOnboarded()
                         viewModel.finishOnboarding()
-                        navController.navigate(AppRoute.Chats.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                        navController.navigateTo(AppNavigationPolicy.onFinishOnboarding(wasOnboarded))
                     }
                 )
             }
             composable(AppRoute.Chats.route) {
                 ChatsScreen(
-                    onConversationClick = { id -> navController.navigate(AppRoute.Chat.create(id)) },
-                    onAddContact = { navController.navigate(AppRoute.Connect.route) }
+                    onConversationClick = { id -> navController.navigateTo(AppNavigationPolicy.onOpenConversation(id)) },
+                    onAddContact = { navController.navigateTo(AppNavigationPolicy.onAddContact()) }
                 )
             }
             composable(
@@ -368,9 +361,7 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
                     onScanResult = { raw ->
                         connectViewModel.importInvitationResult(raw).fold(
                             onSuccess = { contactId ->
-                                navController.navigate(AppRoute.Chat.create(contactId)) {
-                                    popUpTo(AppRoute.Scanner.route) { inclusive = true }
-                                }
+                                navController.navigateTo(AppNavigationPolicy.onQrScanSuccess(contactId))
                                 Result.success(Unit)
                             },
                             onFailure = { Result.failure(it) }
@@ -501,3 +492,17 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         )
     }
 }
+
+private fun androidx.navigation.NavController.navigateTo(action: NavAction) {
+    navigate(action.route) {
+        if (action.popUpToRoute != null) {
+            popUpTo(action.popUpToRoute) {
+                inclusive = action.inclusive
+                saveState = action.saveState
+            }
+        }
+        launchSingleTop = action.launchSingleTop
+        restoreState = action.restoreState
+    }
+}
+

@@ -4,3 +4,8 @@ Thumbs.db
 *.swp
 *.swo
 *.log
+.gradle_user_home/
+android-sdk/
+jdk/
+local.properties
+
