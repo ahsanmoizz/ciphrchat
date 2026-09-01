@@ -49,6 +49,17 @@ fun CallScreen(
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val micPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            onAccept()
+        } else {
+            onDecline()
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -87,7 +98,7 @@ fun CallScreen(
                     is CallState.IncomingRinging -> Pair(callState.contactName, "Incoming Audio Call...")
                     is CallState.Connecting -> Pair(callState.contactName, "Connecting...")
                     is CallState.Connected -> Pair(callState.contactName, formatDuration(callState.connectedAtEpochMs))
-                    is CallState.Reconnecting -> Pair(callState.contactName, "Reconnecting...")
+                    is CallState.Reconnecting -> Pair(callState.contactName, "Reconnecting (${callState.attempt}/${callState.maxAttempts})...")
                     is CallState.Ended -> Pair("Call Ended", callState.reason)
                     is CallState.Failed -> Pair("Call Failed", callState.error)
                     CallState.Idle -> Pair("", "")
@@ -105,6 +116,15 @@ fun CallScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                if (callState is CallState.Connected && callState.diagnostics.rttMs > 0L) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "RTT: ${callState.diagnostics.rttMs}ms | Loss: ${callState.diagnostics.packetsLost}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // Controls
@@ -126,7 +146,17 @@ fun CallScreen(
                         }
 
                         FloatingActionButton(
-                            onClick = onAccept,
+                            onClick = {
+                                val hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.RECORD_AUDIO
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                if (hasMicPermission) {
+                                    onAccept()
+                                } else {
+                                    micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
                             containerColor = Color(0xFF43A047),
                             contentColor = Color.White,
                             modifier = Modifier.size(72.dp)

@@ -54,6 +54,13 @@ fun ChatScreen(
     val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::sendAttachment)
     }
+    val micPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
+        } else {
+            viewModel.showNotice("Microphone permission is required to make audio calls")
+        }
+    }
 
     val visibleMessages = remember(messages, searchQuery) {
         val query = searchQuery.trim()
@@ -87,7 +94,16 @@ fun ChatScreen(
                     },
                     actions = {
                         IconButton(onClick = {
-                            onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
+                            val hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context,
+                                android.Manifest.permission.RECORD_AUDIO
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                            if (hasMicPermission) {
+                                onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
+                            } else {
+                                micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                            }
                         }) {
                             Icon(Icons.Default.Call, "Audio Call", tint = CiphrText)
                         }

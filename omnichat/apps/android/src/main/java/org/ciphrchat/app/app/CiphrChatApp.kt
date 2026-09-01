@@ -147,22 +147,22 @@ class OnboardingViewModel @Inject constructor(
     }
 
     fun startCall(contactId: String, contactName: String) {
-        val currentId = identity?.fingerprint ?: "self"
+        val currentId = identity?.publicId ?: "self"
         callManager.startCall(contactId, contactName, currentId)
     }
 
     fun acceptCall() {
-        val currentId = identity?.fingerprint ?: "self"
+        val currentId = identity?.publicId ?: "self"
         callManager.acceptCall(currentId)
     }
 
     fun declineCall() {
-        val currentId = identity?.fingerprint ?: "self"
+        val currentId = identity?.publicId ?: "self"
         callManager.declineCall(currentId)
     }
 
     fun hangupCall() {
-        val currentId = identity?.fingerprint ?: "self"
+        val currentId = identity?.publicId ?: "self"
         callManager.hangup(currentId)
     }
 

@@ -65,6 +65,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun clearNotice() { _notice.value = null }
+    fun showNotice(text: String) { _notice.value = text }
 
     fun clearChat(onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {

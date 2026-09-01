@@ -528,7 +528,7 @@ class PersistentMessageRepository @Inject constructor(
                     is CallSignal.IceCandidate -> audioCallManager.onRemoteIceCandidate(signal)
                     is CallSignal.Reject -> audioCallManager.onCallReject(signal)
                     is CallSignal.Hangup -> audioCallManager.onCallHangup(signal)
-                    is CallSignal.Ringing -> {}
+                    is CallSignal.Ringing -> audioCallManager.onCallRinging(signal)
                 }
                 return
             }
