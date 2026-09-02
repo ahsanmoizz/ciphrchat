@@ -1,11 +1,13 @@
 package org.ciphrchat.app.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -15,12 +17,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.ciphrchat.app.files.FileTransferProgress
 import org.ciphrchat.app.messaging.TransportPresentationPolicy
 import org.ciphrchat.app.ui.theme.*
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CiphrMessageBubble(
     text: String,
@@ -32,11 +36,13 @@ fun CiphrMessageBubble(
     attachmentMimeType: String? = null,
     attachmentSizeBytes: Long = 0L,
     attachmentStoragePath: String? = null,
+    isForwarded: Boolean = false,
     transferProgress: FileTransferProgress? = null,
     onOpenAttachment: (() -> Unit)? = null,
     onCancelTransfer: (() -> Unit)? = null,
     onResumeTransfer: (() -> Unit)? = null,
     onRetryTransfer: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val route = TransportPresentationPolicy.forName(selectedTransport)
@@ -58,15 +64,39 @@ fun CiphrMessageBubble(
         Box(
             modifier = Modifier
                 .widthIn(max = 300.dp)
-                .then(
-                    if (attachmentFileName != null && onOpenAttachment != null && !isLargeFile) {
-                        Modifier.clickable { onOpenAttachment() }
-                    } else Modifier
+                .clip(bubbleShape)
+                .background(bubbleColor)
+                .combinedClickable(
+                    onClick = {
+                        if (attachmentFileName != null && onOpenAttachment != null && !isLargeFile) {
+                            onOpenAttachment()
+                        }
+                    },
+                    onLongClick = onLongClick
                 )
-                .background(bubbleColor, bubbleShape)
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column {
+                if (isForwarded) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(bottom = 3.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Forwarded",
+                            tint = CiphrTextSecondary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = "Forwarded",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontStyle = FontStyle.Italic,
+                            color = CiphrTextSecondary
+                        )
+                    }
+                }
                 if (attachmentFileName != null) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

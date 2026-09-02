@@ -17,7 +17,8 @@ data class ChatMessage(
     val attachmentMimeType: String? = null,
     val attachmentStoragePath: String? = null,
     val attachmentSizeBytes: Long = 0L,
-    val attachmentSha256: String? = null
+    val attachmentSha256: String? = null,
+    val isForwarded: Boolean = false
 )
 
 data class ConversationSummary(

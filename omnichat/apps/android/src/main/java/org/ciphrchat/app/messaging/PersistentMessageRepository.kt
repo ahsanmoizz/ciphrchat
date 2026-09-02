@@ -403,6 +403,115 @@ class PersistentMessageRepository @Inject constructor(
             }
         }
 
+    override suspend fun deleteMessage(messageId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                require(messageId.isNotBlank()) { "Message ID is required" }
+                val message = dao.findById(messageId) ?: return@runCatching
+                val path = message.attachmentStoragePath
+                if (!path.isNullOrBlank() && !path.startsWith("large_file:")) {
+                    val references = dao.countOtherReferencesToAttachment(path, messageId)
+                    if (references == 0) {
+                        attachmentStore.delete(path)
+                    }
+                }
+                dao.deleteMessageById(messageId)
+            }
+        }
+
+    override suspend fun retryMessage(messageId: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                require(messageId.isNotBlank()) { "Message ID is required" }
+                val message = dao.findById(messageId) ?: error("Message not found")
+                if (message.status == MessageStatus.DELIVERED || message.status == MessageStatus.SENT) {
+                    return@runCatching
+                }
+                dao.updateMessage(message.copy(status = MessageStatus.QUEUED))
+                triggerOutboxFlush()
+            }
+        }
+
+    override suspend fun forwardMessage(
+        targetConversationId: String,
+        targetRecipientId: String,
+        originalMessage: ChatMessage
+    ): Result<ChatMessage> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(targetConversationId.isNotBlank() && targetRecipientId.isNotBlank()) {
+                "Target conversation and recipient are required"
+            }
+            val contact = contacts.find(targetRecipientId)
+                ?: error("Contact is not paired: scan or enter their invitation first")
+            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+            if (!sessions.hasSession(address)) {
+                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+            }
+
+            val path = originalMessage.attachmentStoragePath
+            val fileName = originalMessage.attachmentFileName
+            if (fileName != null && path != null) {
+                if (path.startsWith("large_file:")) {
+                    val fileId = path.removePrefix("large_file:")
+                    val descriptor = largeFileManager.findDescriptorByFileId(fileId)
+                    if (descriptor != null) {
+                        sendContent(
+                            conversationId = targetConversationId,
+                            recipientId = targetRecipientId,
+                            address = address,
+                            plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
+                            body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
+                            attachmentFileName = descriptor.fileName,
+                            attachmentMimeType = descriptor.mimeType,
+                            attachmentStoragePath = path,
+                            attachmentSizeBytes = descriptor.fileSize,
+                            attachmentSha256 = descriptor.sha256,
+                            isForwarded = true
+                        )
+                    } else {
+                        error("Large file descriptor is unavailable")
+                    }
+                } else {
+                    val materialized = attachmentStore.materialize(path, fileName)
+                    val bytes = materialized.readBytes()
+                    val stored = attachmentStore.save(
+                        fileName,
+                        originalMessage.attachmentMimeType ?: "application/octet-stream",
+                        bytes
+                    )
+                    sendContent(
+                        conversationId = targetConversationId,
+                        recipientId = targetRecipientId,
+                        address = address,
+                        plaintext = MessageContentCodec.encodeAttachment(
+                            fileName,
+                            originalMessage.attachmentMimeType ?: "application/octet-stream",
+                            bytes
+                        ),
+                        body = originalMessage.body,
+                        attachmentFileName = fileName,
+                        attachmentMimeType = originalMessage.attachmentMimeType,
+                        attachmentStoragePath = stored.path,
+                        attachmentSizeBytes = stored.size,
+                        attachmentSha256 = stored.sha256,
+                        isForwarded = true
+                    )
+                }
+            } else {
+                val text = originalMessage.body
+                require(text.isNotBlank()) { "Message cannot be empty" }
+                sendContent(
+                    conversationId = targetConversationId,
+                    recipientId = targetRecipientId,
+                    address = address,
+                    plaintext = MessageContentCodec.encodeText(text),
+                    body = text,
+                    isForwarded = true
+                )
+            }
+        }
+    }
+
     private suspend fun sendContent(
         conversationId: String,
         recipientId: String,
@@ -413,7 +522,8 @@ class PersistentMessageRepository @Inject constructor(
         attachmentMimeType: String? = null,
         attachmentStoragePath: String? = null,
         attachmentSizeBytes: Long = 0L,
-        attachmentSha256: String? = null
+        attachmentSha256: String? = null,
+        isForwarded: Boolean = false
     ): ChatMessage {
         val messageId = UUID.randomUUID().toString()
 
@@ -439,7 +549,8 @@ class PersistentMessageRepository @Inject constructor(
             attachmentMimeType = attachmentMimeType,
             attachmentStoragePath = attachmentStoragePath,
             attachmentSizeBytes = attachmentSizeBytes,
-            attachmentSha256 = attachmentSha256
+            attachmentSha256 = attachmentSha256,
+            isForwarded = isForwarded
         )
 
         val persistStart = System.currentTimeMillis()
@@ -467,7 +578,8 @@ class PersistentMessageRepository @Inject constructor(
         attachmentMimeType = attachmentMimeType,
         attachmentStoragePath = attachmentStoragePath,
         attachmentSizeBytes = attachmentSizeBytes,
-        attachmentSha256 = attachmentSha256
+        attachmentSha256 = attachmentSha256,
+        isForwarded = isForwarded
     )
 
     private fun decryptBody(entity: MessageEntity): String = runCatching {

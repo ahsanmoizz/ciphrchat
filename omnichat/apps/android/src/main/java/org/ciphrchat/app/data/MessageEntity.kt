@@ -28,7 +28,8 @@ data class MessageEntity(
     val attachmentMimeType: String? = null,
     val attachmentStoragePath: String? = null,
     val attachmentSizeBytes: Long = 0L,
-    val attachmentSha256: String? = null
+    val attachmentSha256: String? = null,
+    val isForwarded: Boolean = false
 )
 
 @Dao
@@ -44,6 +45,12 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteConversation(conversationId: String): Int
+
+    @Query("DELETE FROM messages WHERE id = :messageId")
+    suspend fun deleteMessageById(messageId: String): Int
+
+    @Query("SELECT COUNT(*) FROM messages WHERE attachmentStoragePath = :path AND id != :messageId")
+    suspend fun countOtherReferencesToAttachment(path: String, messageId: String): Int
 
     @Query("SELECT * FROM messages ORDER BY createdAtEpochMs DESC")
     fun getAllMessages(): Flow<List<MessageEntity>>

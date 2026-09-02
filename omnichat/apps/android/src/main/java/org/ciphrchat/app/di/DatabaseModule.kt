@@ -63,6 +63,12 @@ object DatabaseModule {
         }
     }
 
+    val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE messages ADD COLUMN isForwarded INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideAppDatabase(
@@ -83,6 +89,7 @@ object DatabaseModule {
         .addMigrations(MIGRATION_3_4)
         .addMigrations(MIGRATION_4_5)
         .addMigrations(MIGRATION_5_6)
+        .addMigrations(MIGRATION_6_7)
         .build()
     }
 }

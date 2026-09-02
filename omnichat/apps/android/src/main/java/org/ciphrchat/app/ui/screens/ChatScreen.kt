@@ -7,12 +7,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +25,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import org.ciphrchat.app.messaging.ChatMessage
 import org.ciphrchat.app.messaging.ChatViewModel
 import org.ciphrchat.app.messaging.MessageDirection
 import org.ciphrchat.app.ui.components.CiphrMessageBubble
@@ -42,12 +47,16 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val resolvedContactName by viewModel.contactName.collectAsState()
+    val contactsList by viewModel.contactsList.collectAsState()
     val transferProgressMap by viewModel.fileTransferProgress.collectAsState()
     val notice by viewModel.notice.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var searchVisible by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
+    var selectedMessageForActions by remember { mutableStateOf<ChatMessage?>(null) }
+    var showForwardDialog by remember { mutableStateOf(false) }
+    var showDeleteSingleConfirmation by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val currentLocale = LocalConfiguration.current.locales[0]
     val context = LocalContext.current
@@ -231,6 +240,7 @@ fun ChatScreen(
                     attachmentMimeType = message.attachmentMimeType,
                     attachmentSizeBytes = message.attachmentSizeBytes,
                     attachmentStoragePath = message.attachmentStoragePath,
+                    isForwarded = message.isForwarded,
                     transferProgress = progress,
                     onOpenAttachment = if (message.attachmentFileName != null) {
                         {
@@ -249,10 +259,207 @@ fun ChatScreen(
                     } else null,
                     onCancelTransfer = if (fileId != null) { { viewModel.cancelLargeFile(fileId) } } else null,
                     onResumeTransfer = if (fileId != null) { { viewModel.materializeAttachment(message) {} } } else null,
-                    onRetryTransfer = if (fileId != null) { { viewModel.materializeAttachment(message) {} } } else null
+                    onRetryTransfer = if (fileId != null) { { viewModel.materializeAttachment(message) {} } } else null,
+                    onLongClick = {
+                        selectedMessageForActions = message
+                    }
                 )
             }
         }
+    }
+
+    selectedMessageForActions?.let { targetMessage ->
+        if (!showForwardDialog && !showDeleteSingleConfirmation) {
+            AlertDialog(
+                onDismissRequest = { selectedMessageForActions = null },
+                title = { Text("Message Actions", color = CiphrText) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (targetMessage.attachmentFileName == null && targetMessage.body.isNotBlank()) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.copyToClipboard(context, targetMessage.body)
+                                    selectedMessageForActions = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, "Copy", tint = CiphrText)
+                                    Text("Copy text", color = CiphrText)
+                                }
+                            }
+                        }
+
+                        TextButton(
+                            onClick = {
+                                showForwardDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", tint = CiphrText)
+                                Text("Forward", color = CiphrText)
+                            }
+                        }
+
+                        if (targetMessage.attachmentFileName != null) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.shareAttachment(context, targetMessage)
+                                    selectedMessageForActions = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, "Share", tint = CiphrText)
+                                    Text("Share file", color = CiphrText)
+                                }
+                            }
+                        }
+
+                        if (targetMessage.status == org.ciphrchat.app.messaging.MessageStatus.FAILED) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.retryMessage(targetMessage.id)
+                                    selectedMessageForActions = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, "Retry", tint = CiphrPrimary)
+                                    Text("Retry sending", color = CiphrPrimary)
+                                }
+                            }
+                        }
+
+                        TextButton(
+                            onClick = {
+                                showDeleteSingleConfirmation = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error)
+                                Text("Delete for me", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { selectedMessageForActions = null }) {
+                        Text("Cancel", color = CiphrTextSecondary)
+                    }
+                },
+                containerColor = CiphrSurface
+            )
+        }
+    }
+
+    if (showForwardDialog && selectedMessageForActions != null) {
+        val messageToForward = selectedMessageForActions!!
+        AlertDialog(
+            onDismissRequest = {
+                showForwardDialog = false
+                selectedMessageForActions = null
+            },
+            title = { Text("Forward to…", color = CiphrText) },
+            text = {
+                if (contactsList.isEmpty()) {
+                    Text("No paired contacts available to forward to.", color = CiphrTextSecondary)
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+                        items(contactsList, key = { it.contactId }) { contact ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.forwardMessage(contact.contactId, messageToForward) {
+                                        showForwardDialog = false
+                                        selectedMessageForActions = null
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = contact.displayName.ifBlank { "Contact ${contact.contactId.takeLast(6)}" },
+                                        color = CiphrText,
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = {
+                    showForwardDialog = false
+                    selectedMessageForActions = null
+                }) {
+                    Text("Cancel", color = CiphrTextSecondary)
+                }
+            },
+            containerColor = CiphrSurface
+        )
+    }
+
+    if (showDeleteSingleConfirmation && selectedMessageForActions != null) {
+        val messageToDelete = selectedMessageForActions!!
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteSingleConfirmation = false
+                selectedMessageForActions = null
+            },
+            title = { Text("Delete Message?", color = CiphrText) },
+            text = {
+                Text(
+                    "This message will be removed from your device. Other recipients will keep their copy.",
+                    color = CiphrTextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteMessage(messageToDelete.id)
+                    showDeleteSingleConfirmation = false
+                    selectedMessageForActions = null
+                }) {
+                    Text("Delete for me", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDeleteSingleConfirmation = false
+                    selectedMessageForActions = null
+                }) {
+                    Text("Cancel", color = CiphrTextSecondary)
+                }
+            },
+            containerColor = CiphrSurface
+        )
     }
 
     if (showClearConfirmation) {
@@ -276,3 +483,4 @@ fun ChatScreen(
         )
     }
 }
+

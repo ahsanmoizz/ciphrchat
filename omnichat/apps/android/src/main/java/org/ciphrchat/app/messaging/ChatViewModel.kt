@@ -1,20 +1,25 @@
 package org.ciphrchat.app.messaging
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import android.net.Uri
-import java.io.File
 import org.ciphrchat.app.files.LargeFileTransferManager
 import org.ciphrchat.app.identity.ContactRepository
+import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
@@ -29,6 +34,9 @@ class ChatViewModel @Inject constructor(
     val conversationId: String = savedStateHandle["conversationId"] ?: ""
 
     val messages = repository.messages(conversationId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val contactsList = contacts.observe()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val fileTransferProgress = largeFileManager.progress
@@ -57,6 +65,70 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             repository.sendAttachment(conversationId, conversationId, uri)
                 .onFailure { _notice.value = it.message ?: "Attachment could not be sent" }
+        }
+    }
+
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            repository.deleteMessage(messageId)
+                .onFailure { _notice.value = it.message ?: "Message could not be deleted" }
+        }
+    }
+
+    fun retryMessage(messageId: String) {
+        viewModelScope.launch {
+            repository.retryMessage(messageId)
+                .onFailure { _notice.value = it.message ?: "Could not retry message" }
+        }
+    }
+
+    fun forwardMessage(targetContactId: String, message: ChatMessage, onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            repository.forwardMessage(
+                targetConversationId = targetContactId,
+                targetRecipientId = targetContactId,
+                originalMessage = message
+            ).onSuccess {
+                _notice.value = "Message forwarded"
+                onComplete(true)
+            }.onFailure {
+                _notice.value = it.message ?: "Could not forward message"
+                onComplete(false)
+            }
+        }
+    }
+
+    fun copyToClipboard(context: Context, text: String) {
+        runCatching {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("CiphrChat Message", text)
+            clipboard.setPrimaryClip(clip)
+            _notice.value = "Copied to clipboard"
+        }.onFailure {
+            _notice.value = "Could not copy text"
+        }
+    }
+
+    fun shareAttachment(context: Context, message: ChatMessage) {
+        materializeAttachment(message) { result ->
+            result.onSuccess { file ->
+                runCatching {
+                    val authority = "${context.packageName}.fileprovider"
+                    val uri = FileProvider.getUriForFile(context, authority, file)
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = message.attachmentMimeType ?: "*/*"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    val chooser = Intent.createChooser(shareIntent, "Share attachment")
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(chooser)
+                }.onFailure {
+                    _notice.value = "Could not share attachment"
+                }
+            }.onFailure {
+                _notice.value = "Could not prepare attachment for sharing"
+            }
         }
     }
 
@@ -102,3 +174,4 @@ class ChatViewModel @Inject constructor(
         }
     }
 }
+
