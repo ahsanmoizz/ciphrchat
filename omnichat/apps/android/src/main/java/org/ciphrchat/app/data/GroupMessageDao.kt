@@ -72,6 +72,9 @@ interface GroupMessageDao {
     @Query("UPDATE group_recipient_deliveries SET status = 'QUEUED' WHERE groupMessageId = :messageId AND status = 'FAILED'")
     suspend fun requeueFailedDeliveriesForMessage(messageId: String): Int
 
+    @Query("SELECT * FROM group_recipient_deliveries WHERE status = 'SENT'")
+    suspend fun getSentDeliveries(): List<GroupRecipientDeliveryEntity>
+
     @Query("DELETE FROM group_recipient_deliveries WHERE groupMessageId = :messageId")
     suspend fun deleteDeliveriesForMessage(messageId: String): Int
 }

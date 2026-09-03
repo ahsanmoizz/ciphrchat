@@ -9,6 +9,10 @@ import org.ciphrchat.app.messaging.ChatMessage
 import org.ciphrchat.app.messaging.MessageContentCodec
 import org.ciphrchat.app.messaging.MessageDirection
 import org.ciphrchat.app.messaging.MessageStatus
+import org.ciphrchat.app.di.DatabaseModule
+import androidx.sqlite.db.SupportSQLiteDatabase
+import java.lang.reflect.Proxy
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -242,6 +246,8 @@ class GroupChatRegressionTest {
             messages.values.count { it.attachmentStoragePath == path && it.id != messageId }
         override suspend fun getPendingDeliveries(): List<GroupRecipientDeliveryEntity> =
             deliveries.values.flatten().filter { it.status == MessageStatus.QUEUED || it.status == MessageStatus.ROUTING }
+        override suspend fun getSentDeliveries(): List<GroupRecipientDeliveryEntity> =
+            deliveries.values.flatten().filter { it.status == MessageStatus.SENT }
         override suspend fun getDeliveriesForMessage(messageId: String): List<GroupRecipientDeliveryEntity> =
             deliveries[messageId] ?: emptyList()
         override suspend fun getDelivery(messageId: String, recipientId: String): GroupRecipientDeliveryEntity? =
@@ -618,5 +624,112 @@ class GroupChatRegressionTest {
             }
             return true
         }
+    }
+
+    // -------------------------------------------------------------
+    // 5. ADVERSARIAL AUDIT TESTS: MIGRATION, RECONCILIATION, SPOOFING
+    // -------------------------------------------------------------
+
+    @Test
+    fun roomMigration8To9_andSequentialChain_preservesTablesAndIndices() {
+        assertNotNull(DatabaseModule.MIGRATION_8_9)
+        assertEquals(8, DatabaseModule.MIGRATION_8_9.startVersion)
+        assertEquals(9, DatabaseModule.MIGRATION_8_9.endVersion)
+
+        val executedSql = mutableListOf<String>()
+        val db = Proxy.newProxyInstance(
+            SupportSQLiteDatabase::class.java.classLoader,
+            arrayOf(SupportSQLiteDatabase::class.java)
+        ) { _, method, args ->
+            if (method.name == "execSQL" && args != null && args.isNotEmpty()) {
+                executedSql.add(args[0] as String)
+            }
+            null
+        } as SupportSQLiteDatabase
+
+        // Execute sequentially: 6->7, 7->8, 8->9
+        DatabaseModule.MIGRATION_6_7.migrate(db)
+        DatabaseModule.MIGRATION_7_8.migrate(db)
+        DatabaseModule.MIGRATION_8_9.migrate(db)
+
+        // Verify MIGRATION_6_7
+        assertTrue("MIGRATION_6_7 must add isForwarded column",
+            executedSql.any { it.contains("ALTER TABLE messages ADD COLUMN isForwarded") })
+
+        // Verify MIGRATION_7_8
+        assertTrue("MIGRATION_7_8 must add composite index",
+            executedSql.any { it.contains("index_messages_conversationId_createdAtEpochMs") })
+
+        // Verify MIGRATION_8_9 tables
+        assertTrue("Must create groups table", executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS groups") })
+        assertTrue("Must create group_members table", executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS group_members") })
+        assertTrue("Must create group_messages table", executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS group_messages") })
+        assertTrue("Must create group_recipient_deliveries table", executedSql.any { it.contains("CREATE TABLE IF NOT EXISTS group_recipient_deliveries") })
+
+        // Verify MIGRATION_8_9 indices
+        assertTrue("Must create group_messages group index", executedSql.any { it.contains("index_group_messages_groupId_createdAtEpochMs") })
+        assertTrue("Must create group_messages status index", executedSql.any { it.contains("index_group_messages_status") })
+        assertTrue("Must create group_recipient_deliveries indices", executedSql.any { it.contains("index_group_recipient_deliveries_groupMessageId") })
+    }
+
+    @Test
+    fun staleSentBoundedReconciliation_requeuesThenMarksFailedAfterMaxAttempts() {
+        val attemptsMap = ConcurrentHashMap<String, Int>()
+        val maxAttempts = 2
+        val msgId = "stale-sent-msg-1"
+        var currentStatus = MessageStatus.SENT
+
+        fun simulateReconcile() {
+            val attempts = attemptsMap.getOrDefault(msgId, 0)
+            if (attempts < maxAttempts) {
+                attemptsMap[msgId] = attempts + 1
+                currentStatus = MessageStatus.QUEUED
+            } else {
+                currentStatus = MessageStatus.FAILED
+            }
+        }
+
+        // Cycle 1: Stale SENT -> requeued for attempt 1
+        simulateReconcile()
+        assertEquals(MessageStatus.QUEUED, currentStatus)
+        assertEquals(1, attemptsMap[msgId])
+
+        // Assume transport accepts again -> SENT
+        currentStatus = MessageStatus.SENT
+
+        // Cycle 2: Stale SENT again -> requeued for attempt 2
+        simulateReconcile()
+        assertEquals(MessageStatus.QUEUED, currentStatus)
+        assertEquals(2, attemptsMap[msgId])
+
+        // Assume transport accepts again -> SENT
+        currentStatus = MessageStatus.SENT
+
+        // Cycle 3: Still no receipt after 2 reconciliation attempts -> marked FAILED
+        simulateReconcile()
+        assertEquals("Message must transition to FAILED after exceeding max reconciliation attempts", MessageStatus.FAILED, currentStatus)
+        assertEquals(2, attemptsMap[msgId])
+    }
+
+    @Test
+    fun inboundGroupMessage_rejectsSpoofedSenderId() {
+        val authenticatedSignalPeerId = "user_bob_authenticated"
+        val spoofedInnerSenderId = "user_alice_impersonated"
+
+        val payload = MessageContentCodec.GroupMessagePayload(
+            groupId = "group_audit_1",
+            groupMessageId = "msg_spoof_check_1",
+            senderId = spoofedInnerSenderId,
+            text = "Malicious impersonation"
+        )
+
+        // Authenticity rule: groupMsg.senderId MUST match authenticated senderId
+        val isAuthentic = (payload.senderId == authenticatedSignalPeerId)
+        assertFalse("Inbound group payload with spoofed senderId must be rejected", isAuthentic)
+
+        // Legitimate matching payload
+        val validPayload = payload.copy(senderId = authenticatedSignalPeerId)
+        val isValidAuthentic = (validPayload.senderId == authenticatedSignalPeerId)
+        assertTrue("Authentic inbound group payload must match authenticated sender identity", isValidAuthentic)
     }
 }

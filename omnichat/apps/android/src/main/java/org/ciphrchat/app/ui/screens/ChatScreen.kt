@@ -416,7 +416,9 @@ fun ChatScreen(
                             }
                         }
 
-                        if (targetMessage.status == org.ciphrchat.app.messaging.MessageStatus.FAILED) {
+                        if (targetMessage.direction == MessageDirection.OUTGOING &&
+                            targetMessage.status != org.ciphrchat.app.messaging.MessageStatus.DELIVERED
+                        ) {
                             TextButton(
                                 onClick = {
                                     viewModel.retryMessage(targetMessage.id)
@@ -430,7 +432,11 @@ fun ChatScreen(
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Icon(Icons.Default.Refresh, "Retry", tint = CiphrPrimary)
-                                    Text("Retry sending", color = CiphrPrimary)
+                                    Text(
+                                        if (targetMessage.status == org.ciphrchat.app.messaging.MessageStatus.FAILED) "Retry sending"
+                                        else "Resend message",
+                                        color = CiphrPrimary
+                                    )
                                 }
                             }
                         }

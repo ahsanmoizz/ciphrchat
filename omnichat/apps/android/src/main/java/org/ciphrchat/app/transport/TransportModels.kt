@@ -86,7 +86,6 @@ sealed interface Reachability {
     /** Compatibility states used by the prototype transport adapters. */
     data object DIRECT : Reachability
     data object MESH_PATH : Reachability
-    data object UNREACHABLE : Reachability
 }
 
 sealed interface SendResult {

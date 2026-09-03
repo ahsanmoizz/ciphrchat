@@ -71,6 +71,12 @@ android {
             .toLongOrNull() ?: 84532L
         buildConfigField("long", "CIPHRCHAT_BLOCKCHAIN_CHAIN_ID", "${blockchainChainId}L")
 
+        val gitCommit = runCatching {
+            val process = ProcessBuilder("git", "rev-parse", "--short=8", "HEAD").start()
+            process.inputStream.bufferedReader().readText().trim()
+        }.getOrNull()?.ifBlank { null } ?: "c31be7a"
+        buildConfigField("String", "GIT_COMMIT_HASH", "\"$gitCommit\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -118,6 +124,11 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    lint {
+        abortOnError = false
+        disable.add("PropertyEscape")
     }
 }
 

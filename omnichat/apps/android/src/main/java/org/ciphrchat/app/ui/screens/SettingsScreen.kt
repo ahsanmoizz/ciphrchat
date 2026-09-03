@@ -101,7 +101,7 @@ fun SettingsScreen(
         SettingsInfoRow("Source code", "github.com/ahsanmoizz/ciphrchat")
         SettingsInfoRow("Open-source licenses", "See the repository notices")
         SettingsInfoRow("Security model", "See docs/ARCHITECTURE.md")
-        SettingsInfoRow("Version ${BuildConfig.VERSION_NAME}", "Cross-network reliability build")
+        SettingsInfoRow("Version ${BuildConfig.VERSION_NAME}", "Build ${BuildConfig.GIT_COMMIT_HASH} · Cross-network reliability build")
     }
 }
 

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withPermit
 import android.util.Base64
 import org.json.JSONObject
 import kotlinx.coroutines.flow.map
@@ -70,6 +71,9 @@ class PersistentMessageRepository @Inject constructor(
     private val outboxScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeInFlightMessages = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val activeInFlightDeliveries = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val groupFanOutSemaphore = kotlinx.coroutines.sync.Semaphore(4)
+    private val directOutboxSemaphore = kotlinx.coroutines.sync.Semaphore(4)
+    private val sentReconciliationAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
     private val outboxSignal = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 64)
     private val decryptedBodyCache = android.util.LruCache<String, String>(2000)
 
@@ -158,7 +162,34 @@ class PersistentMessageRepository @Inject constructor(
         processOutbox()
     }
 
+    private suspend fun reconcileStaleSentMessages() {
+        val now = System.currentTimeMillis()
+        val staleSentDirect = dao.getMessagesByStatus(MessageStatus.SENT)
+            .filter { it.direction == MessageDirection.OUTGOING && (now - it.createdAtEpochMs) > STALE_SENT_RECONCILIATION_THRESHOLD_MS }
+        for (msg in staleSentDirect) {
+            val attempts = sentReconciliationAttempts.getOrDefault(msg.id, 0)
+            if (attempts < MAX_SENT_RECONCILIATION_ATTEMPTS) {
+                sentReconciliationAttempts[msg.id] = attempts + 1
+                dao.updateMessage(msg.copy(status = MessageStatus.QUEUED))
+            } else {
+                dao.updateMessage(msg.copy(status = MessageStatus.FAILED))
+            }
+        }
+
+        val staleGroupDeliveries = groupMessageDao.getSentDeliveries()
+            .filter { (now - it.lastAttemptEpochMs) > STALE_SENT_RECONCILIATION_THRESHOLD_MS }
+        for (del in staleGroupDeliveries) {
+            if (del.attempts < MAX_SENT_RECONCILIATION_ATTEMPTS) {
+                groupMessageDao.updateDelivery(del.copy(status = MessageStatus.QUEUED, attempts = del.attempts + 1))
+            } else {
+                groupMessageDao.updateDelivery(del.copy(status = MessageStatus.FAILED))
+            }
+            updateGroupMessageAggregateStatus(del.groupMessageId)
+        }
+    }
+
     private suspend fun processOutbox(): Boolean {
+        reconcileStaleSentMessages()
         val pendingDirect = dao.getMessagesPendingDelivery()
         val pendingGroup = groupMessageDao.getPendingDeliveries()
         if (pendingDirect.isEmpty() && pendingGroup.isEmpty()) return true
@@ -170,9 +201,11 @@ class PersistentMessageRepository @Inject constructor(
             }
             outboxScope.launch {
                 try {
-                    val success = dispatchSingleOutboxMessage(message)
-                    if (!success) {
-                        allDeliveredOrSent = false
+                    directOutboxSemaphore.withPermit {
+                        val success = dispatchSingleOutboxMessage(message)
+                        if (!success) {
+                            allDeliveredOrSent = false
+                        }
                     }
                 } finally {
                     activeInFlightMessages.remove(message.id)
@@ -187,9 +220,11 @@ class PersistentMessageRepository @Inject constructor(
             }
             outboxScope.launch {
                 try {
-                    val success = dispatchSingleGroupRecipientDelivery(delivery)
-                    if (!success) {
-                        allDeliveredOrSent = false
+                    groupFanOutSemaphore.withPermit {
+                        val success = dispatchSingleGroupRecipientDelivery(delivery)
+                        if (!success) {
+                            allDeliveredOrSent = false
+                        }
                     }
                 } finally {
                     activeInFlightDeliveries.remove(key)
@@ -714,6 +749,12 @@ class PersistentMessageRepository @Inject constructor(
             val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
             Pair(stored.path, stored.sha256)
         } else {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             val (descriptor, _) = largeFileManager.prepareDescriptor(
                 uri = uri,
                 fileName = fileName,
@@ -885,7 +926,8 @@ class PersistentMessageRepository @Inject constructor(
                 require(messageId.isNotBlank()) { "Message ID is required" }
                 val directMsg = dao.findById(messageId)
                 if (directMsg != null) {
-                    if (directMsg.status != MessageStatus.DELIVERED && directMsg.status != MessageStatus.SENT) {
+                    if (directMsg.status != MessageStatus.DELIVERED) {
+                        sentReconciliationAttempts.remove(messageId)
                         dao.updateMessage(directMsg.copy(status = MessageStatus.QUEUED))
                         triggerOutboxFlush()
                     }
@@ -894,8 +936,14 @@ class PersistentMessageRepository @Inject constructor(
 
                 val groupMsg = groupMessageDao.findById(messageId)
                 if (groupMsg != null) {
-                    if (groupMsg.status != MessageStatus.DELIVERED && groupMsg.status != MessageStatus.SENT) {
+                    if (groupMsg.status != MessageStatus.DELIVERED) {
                         groupMessageDao.requeueFailedDeliveriesForMessage(messageId)
+                        val deliveries = groupMessageDao.getDeliveriesForMessage(messageId)
+                        deliveries.forEach { d ->
+                            if (d.status != MessageStatus.DELIVERED) {
+                                groupMessageDao.updateDelivery(d.copy(status = MessageStatus.QUEUED, attempts = 0))
+                            }
+                        }
                         groupMessageDao.updateMessage(groupMsg.copy(status = MessageStatus.QUEUED))
                         triggerOutboxFlush()
                     }
@@ -1213,6 +1261,7 @@ class PersistentMessageRepository @Inject constructor(
 
         val message = dao.findById(messageId) ?: return
         require(message.recipientId == contact.contactId) { "Delivery receipt does not match the recipient" }
+        sentReconciliationAttempts.remove(messageId)
         dao.updateMessage(message.copy(status = MessageStatus.DELIVERED))
         val receiptDuration = System.currentTimeMillis() - receiptStart
         MessageTimingTracker.recordReceipt(messageId, receiptDuration)
@@ -1313,7 +1362,10 @@ class PersistentMessageRepository @Inject constructor(
             return
         }
 
-        // 2. Validate group and membership
+        // 2. Validate group, membership, and sender authenticity
+        if (groupMsg.senderId != senderId) {
+            return
+        }
         val group = groupDao.findGroupById(groupMsg.groupId) ?: return
         val members = groupDao.getMembers(groupMsg.groupId)
         val senderMember = members.find { it.memberPublicId == senderId && it.membershipState == "ACTIVE" }
@@ -1340,7 +1392,7 @@ class PersistentMessageRepository @Inject constructor(
         val entity = org.ciphrchat.app.data.GroupMessageEntity(
             id = groupMsg.groupMessageId,
             groupId = groupMsg.groupId,
-            senderId = groupMsg.senderId,
+            senderId = senderId,
             body = contentCipher.encrypt(plainText),
             createdAtEpochMs = createdAtEpochMs,
             direction = MessageDirection.INCOMING,
@@ -1630,6 +1682,9 @@ class PersistentMessageRepository @Inject constructor(
 
     private suspend fun updateDelivery(messageId: String, status: MessageStatus) {
         if (messageId.isBlank()) return
+        if (status == MessageStatus.DELIVERED) {
+            sentReconciliationAttempts.remove(messageId)
+        }
         val message = dao.findById(messageId) ?: return
         val mergedStatus = DeliveryStatusPolicy.merge(message.status, status)
         if (mergedStatus == message.status) return
@@ -1637,7 +1692,9 @@ class PersistentMessageRepository @Inject constructor(
         if (status == MessageStatus.QUEUED) retryScheduler.schedule()
     }
 
-    private companion object {
+    companion object {
         const val MAX_ENCRYPTED_PAYLOAD_BYTES = 6 * 1024 * 1024
+        const val STALE_SENT_RECONCILIATION_THRESHOLD_MS = 60_000L
+        const val MAX_SENT_RECONCILIATION_ATTEMPTS = 2
     }
 }
