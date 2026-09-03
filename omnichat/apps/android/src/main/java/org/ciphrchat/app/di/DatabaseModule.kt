@@ -76,6 +76,72 @@ object DatabaseModule {
         }
     }
 
+    val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS groups (
+                    groupId TEXT NOT NULL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    creatorPublicId TEXT NOT NULL,
+                    createdAtEpochMs INTEGER NOT NULL,
+                    updatedAtEpochMs INTEGER NOT NULL,
+                    isActive INTEGER NOT NULL DEFAULT 1
+                )
+            """.trimIndent())
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_groups_groupId ON groups(groupId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_groups_updatedAtEpochMs ON groups(updatedAtEpochMs)")
+
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS group_members (
+                    groupId TEXT NOT NULL,
+                    memberPublicId TEXT NOT NULL,
+                    joinedAtEpochMs INTEGER NOT NULL,
+                    membershipState TEXT NOT NULL DEFAULT 'ACTIVE',
+                    PRIMARY KEY(groupId, memberPublicId)
+                )
+            """.trimIndent())
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_members_groupId ON group_members(groupId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_members_memberPublicId ON group_members(memberPublicId)")
+
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS group_messages (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    groupId TEXT NOT NULL,
+                    senderId TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    createdAtEpochMs INTEGER NOT NULL,
+                    direction TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    selectedTransport TEXT,
+                    attachmentFileName TEXT,
+                    attachmentMimeType TEXT,
+                    attachmentStoragePath TEXT,
+                    attachmentSizeBytes INTEGER NOT NULL DEFAULT 0,
+                    attachmentSha256 TEXT,
+                    isForwarded INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent())
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_messages_groupId_createdAtEpochMs ON group_messages(groupId, createdAtEpochMs)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_messages_status ON group_messages(status)")
+
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS group_recipient_deliveries (
+                    groupMessageId TEXT NOT NULL,
+                    recipientPublicId TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    selectedTransport TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    lastAttemptEpochMs INTEGER NOT NULL DEFAULT 0,
+                    errorMessage TEXT,
+                    PRIMARY KEY(groupMessageId, recipientPublicId)
+                )
+            """.trimIndent())
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_recipient_deliveries_groupMessageId ON group_recipient_deliveries(groupMessageId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_recipient_deliveries_recipientPublicId ON group_recipient_deliveries(recipientPublicId)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_group_recipient_deliveries_status ON group_recipient_deliveries(status)")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideAppDatabase(
@@ -98,6 +164,7 @@ object DatabaseModule {
         .addMigrations(MIGRATION_5_6)
         .addMigrations(MIGRATION_6_7)
         .addMigrations(MIGRATION_7_8)
+        .addMigrations(MIGRATION_8_9)
         .build()
     }
 }

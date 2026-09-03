@@ -28,16 +28,35 @@ class ChatViewModel @Inject constructor(
     private val repository: MessageRepository,
     private val contacts: ContactRepository,
     private val attachmentStore: AttachmentStore,
-    private val largeFileManager: LargeFileTransferManager
+    private val largeFileManager: LargeFileTransferManager,
+    private val groupManager: org.ciphrchat.app.groups.GroupManager
 ) : ViewModel() {
 
     val conversationId: String = savedStateHandle["conversationId"] ?: ""
+    val isGroupChat = conversationId.startsWith("group_")
 
     val messages = repository.messages(conversationId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val contactsList = contacts.observe()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val conversationsList = repository.conversations()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val groupState = if (isGroupChat) {
+        groupManager.observeGroup(conversationId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    } else {
+        MutableStateFlow<org.ciphrchat.app.data.GroupEntity?>(null)
+    }
+
+    val groupMembers = if (isGroupChat) {
+        groupManager.observeMembers(conversationId)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    } else {
+        MutableStateFlow<List<org.ciphrchat.app.data.GroupMemberEntity>>(emptyList())
+    }
 
     val fileTransferProgress = largeFileManager.progress
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
@@ -49,7 +68,11 @@ class ChatViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            _contactName.value = contacts.find(conversationId)?.displayName
+            if (isGroupChat) {
+                _contactName.value = groupManager.getGroup(conversationId)?.name ?: "Group"
+            } else {
+                _contactName.value = contacts.find(conversationId)?.displayName
+            }
         }
     }
 
@@ -82,11 +105,25 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun forwardMessage(targetContactId: String, message: ChatMessage, onComplete: (Boolean) -> Unit = {}) {
+    fun leaveGroup(onComplete: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            repository.leaveGroup(conversationId)
+                .onSuccess {
+                    _notice.value = "You left the group"
+                    onComplete(true)
+                }
+                .onFailure {
+                    _notice.value = it.message ?: "Could not leave group"
+                    onComplete(false)
+                }
+        }
+    }
+
+    fun forwardMessage(targetConversationId: String, message: ChatMessage, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             repository.forwardMessage(
-                targetConversationId = targetContactId,
-                targetRecipientId = targetContactId,
+                targetConversationId = targetConversationId,
+                targetRecipientId = targetConversationId,
                 originalMessage = message
             ).onSuccess {
                 _notice.value = "Message forwarded"

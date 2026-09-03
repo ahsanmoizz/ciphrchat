@@ -7,10 +7,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,6 +34,8 @@ fun ChatsScreen(
     viewModel: ChatsViewModel = hiltViewModel()
 ) {
     val conversations by viewModel.conversations.collectAsStateWithLifecycle()
+    val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -53,21 +56,36 @@ fun ChatsScreen(
                 style = MaterialTheme.typography.headlineLarge,
                 color = CiphrText
             )
-            FloatingActionButton(
-                onClick = onAddContact,
-                containerColor = CiphrPrimary,
-                contentColor = CiphrText,
-                shape = CircleShape,
-                modifier = Modifier.size(44.dp)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Add, "Add contact")
+                FilledTonalButton(
+                    onClick = { showCreateGroupDialog = true },
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = CiphrPrimarySoft,
+                        contentColor = CiphrText
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text("+ Group", style = MaterialTheme.typography.labelMedium)
+                }
+                FloatingActionButton(
+                    onClick = onAddContact,
+                    containerColor = CiphrPrimary,
+                    contentColor = CiphrText,
+                    shape = CircleShape,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(Icons.Default.Add, "Add contact")
+                }
             }
         }
 
         if (conversations.isEmpty()) {
             CiphrEmptyState(
                 title = "No conversations yet",
-                subtitle = "Add a contact to start messaging"
+                subtitle = "Add a contact or create a group to start messaging"
             )
         } else {
             LazyColumn(
@@ -82,6 +100,82 @@ fun ChatsScreen(
                 }
             }
         }
+    }
+
+    if (showCreateGroupDialog) {
+        var groupName by remember { mutableStateOf("") }
+        val selectedContacts = remember { mutableStateListOf<String>() }
+
+        AlertDialog(
+            onDismissRequest = { showCreateGroupDialog = false },
+            title = { Text("Create Group", color = CiphrText) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                    OutlinedTextField(
+                        value = groupName,
+                        onValueChange = { if (it.length <= 100) groupName = it },
+                        label = { Text("Group Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text("Select Members:", style = MaterialTheme.typography.titleSmall, color = CiphrText)
+                    Spacer(Modifier.height(8.dp))
+                    if (contacts.isEmpty()) {
+                        Text("No paired contacts available to add", style = MaterialTheme.typography.bodySmall, color = CiphrTextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                            items(contacts, key = { it.contactId }) { contact ->
+                                val isSelected = selectedContacts.contains(contact.contactId)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            if (isSelected) selectedContacts.remove(contact.contactId)
+                                            else selectedContacts.add(contact.contactId)
+                                        }
+                                        .padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { checked ->
+                                            if (checked) selectedContacts.add(contact.contactId)
+                                            else selectedContacts.remove(contact.contactId)
+                                        }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(contact.displayName, color = CiphrText)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = groupName.trim()
+                        if (trimmed.isNotBlank() && selectedContacts.isNotEmpty()) {
+                            viewModel.createGroup(trimmed, selectedContacts.toList()) { newGroupId ->
+                                showCreateGroupDialog = false
+                                onConversationClick(newGroupId)
+                            }
+                        }
+                    },
+                    enabled = groupName.isNotBlank() && selectedContacts.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = CiphrPrimary)
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateGroupDialog = false }) {
+                    Text("Cancel", color = CiphrTextSecondary)
+                }
+            },
+            containerColor = CiphrSurface
+        )
     }
 }
 
@@ -101,13 +195,13 @@ private fun ConversationRow(
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .background(CiphrPrimarySoft, CircleShape),
+                .background(if (conversation.isGroup) CiphrPrimarySoft else CiphrSurfaceMuted, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = conversation.contactName.firstOrNull()?.uppercase() ?: "?",
+                text = if (conversation.isGroup) "G" else (conversation.contactName.firstOrNull()?.uppercase() ?: "?"),
                 fontSize = 20.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.Bold,
                 color = CiphrText
             )
         }
@@ -115,12 +209,28 @@ private fun ConversationRow(
         Spacer(Modifier.width(12.dp))
 
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = conversation.contactName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                color = CiphrText
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = conversation.contactName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = CiphrText
+                )
+                if (conversation.isGroup) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        color = CiphrPrimary.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "GROUP",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CiphrPrimary,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
             Text(
                 text = conversation.lastMessage,
                 style = MaterialTheme.typography.bodyMedium,

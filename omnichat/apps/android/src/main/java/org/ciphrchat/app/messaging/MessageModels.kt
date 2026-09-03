@@ -27,5 +27,7 @@ data class ConversationSummary(
     val contactId: String,
     val lastMessage: String,
     val lastMessageEpochMs: Long,
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val isGroup: Boolean = false,
+    val memberCount: Int = 0
 )

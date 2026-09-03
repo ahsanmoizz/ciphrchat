@@ -12,9 +12,13 @@ import androidx.room.RoomDatabase
         SignalPreKeyEntity::class,
         SignalSignedPreKeyEntity::class,
         SignalSessionEntity::class,
-        SignalLocalStateEntity::class
+        SignalLocalStateEntity::class,
+        GroupEntity::class,
+        GroupMemberEntity::class,
+        GroupMessageEntity::class,
+        GroupRecipientDeliveryEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -22,4 +26,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun contactDao(): ContactDao
     abstract fun signalCryptoDao(): SignalCryptoDao
+    abstract fun groupDao(): GroupDao
+    abstract fun groupMessageDao(): GroupMessageDao
 }

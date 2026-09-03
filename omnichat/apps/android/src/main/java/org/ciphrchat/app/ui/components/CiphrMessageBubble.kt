@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.ciphrchat.app.files.FileTransferProgress
@@ -37,6 +38,7 @@ fun CiphrMessageBubble(
     attachmentSizeBytes: Long = 0L,
     attachmentStoragePath: String? = null,
     isForwarded: Boolean = false,
+    senderDisplayName: String? = null,
     transferProgress: FileTransferProgress? = null,
     onOpenAttachment: (() -> Unit)? = null,
     onCancelTransfer: (() -> Unit)? = null,
@@ -77,6 +79,15 @@ fun CiphrMessageBubble(
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column {
+                if (!isOutgoing && !senderDisplayName.isNullOrBlank()) {
+                    Text(
+                        text = senderDisplayName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CiphrPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 3.dp)
+                    )
+                }
                 if (isForwarded) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

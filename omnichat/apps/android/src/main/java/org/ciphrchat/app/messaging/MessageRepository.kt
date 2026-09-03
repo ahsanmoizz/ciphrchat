@@ -15,4 +15,7 @@ interface MessageRepository {
     suspend fun retryMessage(messageId: String): Result<Unit>
     suspend fun forwardMessage(targetConversationId: String, targetRecipientId: String, originalMessage: ChatMessage): Result<ChatMessage>
     suspend fun getOrDownloadLargeFile(message: ChatMessage): File?
+    suspend fun createGroup(name: String, memberContactIds: List<String>): Result<String>
+    suspend fun leaveGroup(groupId: String): Result<Unit>
+    fun isGroup(conversationId: String): Boolean
 }

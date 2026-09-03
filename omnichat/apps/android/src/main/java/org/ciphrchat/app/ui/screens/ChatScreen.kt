@@ -2,6 +2,7 @@ package org.ciphrchat.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -51,11 +52,15 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val resolvedContactName by viewModel.contactName.collectAsStateWithLifecycle()
     val contactsList by viewModel.contactsList.collectAsStateWithLifecycle()
+    val conversationsList by viewModel.conversationsList.collectAsStateWithLifecycle()
+    val groupState by viewModel.groupState.collectAsStateWithLifecycle()
+    val groupMembers by viewModel.groupMembers.collectAsStateWithLifecycle()
     val transferProgressMap by viewModel.fileTransferProgress.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     var searchQuery by remember { mutableStateOf("") }
     var searchVisible by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
+    var showLeaveGroupConfirmation by remember { mutableStateOf(false) }
     var selectedMessageForActions by remember { mutableStateOf<ChatMessage?>(null) }
     var showForwardDialog by remember { mutableStateOf(false) }
     var showDeleteSingleConfirmation by remember { mutableStateOf(false) }
@@ -133,7 +138,11 @@ fun ChatScreen(
                     title = {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(resolvedContactName ?: contactName, color = CiphrText)
-                            Text("Secure conversation", style = MaterialTheme.typography.labelMedium, color = CiphrTextSecondary)
+                            Text(
+                                if (viewModel.isGroupChat) "${groupMembers.size} members · E2EE Group" else "Secure conversation",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = CiphrTextSecondary
+                            )
                         }
                     },
                     navigationIcon = {
@@ -142,22 +151,29 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = {
-                            val hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-                                context,
-                                android.Manifest.permission.RECORD_AUDIO
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (!viewModel.isGroupChat) {
+                            IconButton(onClick = {
+                                val hasMicPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.RECORD_AUDIO
+                                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-                            if (hasMicPermission) {
-                                onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
-                            } else {
-                                micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                if (hasMicPermission) {
+                                    onStartCall(viewModel.conversationId, resolvedContactName ?: contactName)
+                                } else {
+                                    micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                }
+                            }) {
+                                Icon(Icons.Default.Call, "Audio Call", tint = CiphrText)
                             }
-                        }) {
-                            Icon(Icons.Default.Call, "Audio Call", tint = CiphrText)
                         }
                         IconButton(onClick = { searchVisible = !searchVisible; if (!searchVisible) searchQuery = "" }) {
                             Icon(if (searchVisible) Icons.Default.Close else Icons.Default.Search, if (searchVisible) "Close search" else "Search messages", tint = CiphrText)
+                        }
+                        if (viewModel.isGroupChat && groupState?.isActive == true) {
+                            TextButton(onClick = { showLeaveGroupConfirmation = true }) {
+                                Text("Leave", color = MaterialTheme.colorScheme.error)
+                            }
                         }
                         IconButton(onClick = { showClearConfirmation = true }, enabled = messages.isNotEmpty()) {
                             Icon(Icons.Default.Delete, "Clear chat", tint = CiphrText)
@@ -210,10 +226,26 @@ fun ChatScreen(
                         }
                     }
                 }
-                ChatInputBar(
-                    onSend = viewModel::send,
-                    onAttach = { attachmentPicker.launch(arrayOf("*/*")) }
-                )
+                if (viewModel.isGroupChat && groupState?.isActive == false) {
+                    Surface(
+                        color = CiphrSurfaceMuted,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "You left this group. Past messages are preserved.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = CiphrTextSecondary,
+                            modifier = Modifier.padding(14.dp),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    ChatInputBar(
+                        onSend = viewModel::send,
+                        onAttach = { attachmentPicker.launch(arrayOf("*/*")) }
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -244,6 +276,9 @@ fun ChatScreen(
 
                     val fileId = message.attachmentStoragePath?.removePrefix("large_file:")
                     val progress = if (fileId != null) transferProgressMap[fileId] else null
+                    val senderName = if (viewModel.isGroupChat && message.direction == MessageDirection.INCOMING) {
+                        contactsList.find { it.contactId == message.senderId }?.displayName ?: "Member ${message.senderId.takeLast(6)}"
+                    } else null
 
                     CiphrMessageBubble(
                         text = message.body,
@@ -256,6 +291,7 @@ fun ChatScreen(
                         attachmentSizeBytes = message.attachmentSizeBytes,
                         attachmentStoragePath = message.attachmentStoragePath,
                         isForwarded = message.isForwarded,
+                        senderDisplayName = senderName,
                         transferProgress = progress,
                         onOpenAttachment = if (message.attachmentFileName != null) {
                             {
@@ -429,6 +465,11 @@ fun ChatScreen(
 
     if (showForwardDialog && selectedMessageForActions != null) {
         val messageToForward = selectedMessageForActions!!
+        val otherConversations = conversationsList.filter { it.id != viewModel.conversationId }
+        val forwardTargets = (otherConversations.map { Pair(it.id, if (it.isGroup) "[Group] ${it.contactName}" else it.contactName) } +
+            contactsList.filter { c -> otherConversations.none { it.id == c.contactId } && c.contactId != viewModel.conversationId }
+                .map { Pair(it.contactId, it.displayName.ifBlank { "Contact ${it.contactId.takeLast(6)}" }) }).distinctBy { it.first }
+
         AlertDialog(
             onDismissRequest = {
                 showForwardDialog = false
@@ -436,14 +477,14 @@ fun ChatScreen(
             },
             title = { Text("Forward to…", color = CiphrText) },
             text = {
-                if (contactsList.isEmpty()) {
-                    Text("No paired contacts available to forward to.", color = CiphrTextSecondary)
+                if (forwardTargets.isEmpty()) {
+                    Text("No other contacts or groups available to forward to.", color = CiphrTextSecondary)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
-                        items(contactsList, key = { it.contactId }) { contact ->
+                        items(forwardTargets, key = { it.first }) { target ->
                             TextButton(
                                 onClick = {
-                                    viewModel.forwardMessage(contact.contactId, messageToForward) {
+                                    viewModel.forwardMessage(target.first, messageToForward) {
                                         showForwardDialog = false
                                         selectedMessageForActions = null
                                     }
@@ -452,10 +493,11 @@ fun ChatScreen(
                             ) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Text(
-                                        text = contact.displayName.ifBlank { "Contact ${contact.contactId.takeLast(6)}" },
+                                        text = target.second,
                                         color = CiphrText,
                                         style = MaterialTheme.typography.bodyLarge
                                     )
@@ -471,6 +513,33 @@ fun ChatScreen(
                     showForwardDialog = false
                     selectedMessageForActions = null
                 }) {
+                    Text("Cancel", color = CiphrTextSecondary)
+                }
+            },
+            containerColor = CiphrSurface
+        )
+    }
+
+    if (showLeaveGroupConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showLeaveGroupConfirmation = false },
+            title = { Text("Leave Group", color = CiphrText) },
+            text = {
+                Text(
+                    "Are you sure you want to leave this group? You will no longer receive new messages, but your existing message history will remain readable.",
+                    color = CiphrTextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLeaveGroupConfirmation = false
+                    viewModel.leaveGroup()
+                }) {
+                    Text("Leave", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveGroupConfirmation = false }) {
                     Text("Cancel", color = CiphrTextSecondary)
                 }
             },

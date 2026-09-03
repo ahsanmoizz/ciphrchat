@@ -59,13 +59,17 @@ class PersistentMessageRepository @Inject constructor(
     private val largeFileManager: LargeFileTransferManager,
     private val invitationService: InvitationService,
     private val retryScheduler: PendingMessageRetryScheduler,
-    private val audioCallManager: AudioCallManager
+    private val audioCallManager: AudioCallManager,
+    private val groupManager: org.ciphrchat.app.groups.GroupManager
 ) : MessageRepository {
 
     private val dao = database.messageDao()
+    private val groupDao = database.groupDao()
+    private val groupMessageDao = database.groupMessageDao()
     private val networkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val outboxScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeInFlightMessages = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val activeInFlightDeliveries = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val outboxSignal = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 64)
     private val decryptedBodyCache = android.util.LruCache<String, String>(2000)
 
@@ -155,11 +159,12 @@ class PersistentMessageRepository @Inject constructor(
     }
 
     private suspend fun processOutbox(): Boolean {
-        val pending = dao.getMessagesPendingDelivery()
-        if (pending.isEmpty()) return true
+        val pendingDirect = dao.getMessagesPendingDelivery()
+        val pendingGroup = groupMessageDao.getPendingDeliveries()
+        if (pendingDirect.isEmpty() && pendingGroup.isEmpty()) return true
 
         var allDeliveredOrSent = true
-        for (message in pending) {
+        for (message in pendingDirect) {
             if (!activeInFlightMessages.add(message.id)) {
                 continue
             }
@@ -174,7 +179,137 @@ class PersistentMessageRepository @Inject constructor(
                 }
             }
         }
+
+        for (delivery in pendingGroup) {
+            val key = "${delivery.groupMessageId}_${delivery.recipientPublicId}"
+            if (!activeInFlightDeliveries.add(key)) {
+                continue
+            }
+            outboxScope.launch {
+                try {
+                    val success = dispatchSingleGroupRecipientDelivery(delivery)
+                    if (!success) {
+                        allDeliveredOrSent = false
+                    }
+                } finally {
+                    activeInFlightDeliveries.remove(key)
+                }
+            }
+        }
         return allDeliveredOrSent
+    }
+
+    private suspend fun dispatchSingleGroupRecipientDelivery(delivery: org.ciphrchat.app.data.GroupRecipientDeliveryEntity): Boolean {
+        val groupMessage = groupMessageDao.findById(delivery.groupMessageId) ?: return true
+        if (delivery.status == MessageStatus.DELIVERED) return true
+
+        val contact = contacts.find(delivery.recipientPublicId)
+        if (contact == null) {
+            groupMessageDao.updateDelivery(delivery.copy(status = MessageStatus.FAILED))
+            updateGroupMessageAggregateStatus(delivery.groupMessageId)
+            return false
+        }
+
+        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+        if (!sessions.hasSession(address)) {
+            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+        }
+
+        val attachment = if (groupMessage.attachmentStoragePath != null && groupMessage.attachmentFileName != null && groupMessage.attachmentMimeType != null) {
+            val file = File(groupMessage.attachmentStoragePath)
+            if (file.exists() && file.length() <= 5 * 1024 * 1024) {
+                val bytes = runCatching {
+                    attachmentStore.materialize(groupMessage.attachmentStoragePath, groupMessage.attachmentFileName).readBytes()
+                }.getOrNull()
+                if (bytes != null) {
+                    MessageContentCodec.Attachment(groupMessage.attachmentFileName, groupMessage.attachmentMimeType, bytes)
+                } else null
+            } else null
+        } else null
+
+        val fileDescriptor = if (groupMessage.attachmentSha256 != null && attachment == null) {
+            largeFileManager.findDescriptorBySha256(groupMessage.attachmentSha256)
+        } else null
+
+        val payload = MessageContentCodec.GroupMessagePayload(
+            groupId = groupMessage.groupId,
+            groupMessageId = groupMessage.id,
+            senderId = groupMessage.senderId,
+            text = decryptGroupBody(groupMessage),
+            attachment = attachment,
+            fileDescriptor = fileDescriptor,
+            isForwarded = groupMessage.isForwarded,
+            createdAtEpochMs = groupMessage.createdAtEpochMs
+        )
+
+        val encodedPayload = MessageContentCodec.encodeGroupMessage(payload)
+        val ciphertext = sessions.encryptMessage(address, encodedPayload)
+        val senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+
+        val envelope = OutboundEnvelope(
+            protocolVersion = 2,
+            messageId = "${groupMessage.id}_${contact.contactId}",
+            recipientId = contact.contactId,
+            senderId = groupMessage.senderId,
+            createdAtEpochMs = groupMessage.createdAtEpochMs,
+            expiresAtEpochMs = groupMessage.createdAtEpochMs + 7 * 24 * 60 * 60 * 1000L,
+            hopLimit = 3,
+            encryptedPayload = ciphertext.serialize(),
+            testOnly = false,
+            senderInvitation = senderInvitation
+        )
+
+        if (delivery.status == MessageStatus.QUEUED) {
+            groupMessageDao.updateDelivery(delivery.copy(status = MessageStatus.ROUTING))
+        }
+
+        val sendResult = router.route(envelope)
+        val updatedStatus = DeliveryStatusPolicy.merge(
+            delivery.status,
+            DeliveryStatusPolicy.statusFor(sendResult)
+        )
+        val transportName = when (sendResult) {
+            is SendResult.Accepted -> sendResult.transport.name
+            else -> null
+        }
+
+        val newStatus = if (updatedStatus == MessageStatus.DELIVERED || updatedStatus == MessageStatus.SENT) {
+            updatedStatus
+        } else {
+            val newAttempts = delivery.attempts + 1
+            if (newAttempts >= 5) MessageStatus.FAILED else MessageStatus.QUEUED
+        }
+
+        groupMessageDao.updateDelivery(
+            delivery.copy(
+                status = newStatus,
+                selectedTransport = transportName ?: delivery.selectedTransport,
+                attempts = delivery.attempts + 1,
+                lastAttemptEpochMs = System.currentTimeMillis()
+            )
+        )
+        updateGroupMessageAggregateStatus(delivery.groupMessageId)
+
+        if (newStatus == MessageStatus.QUEUED) {
+            retryScheduler.schedule()
+            return false
+        }
+        return true
+    }
+
+    private suspend fun updateGroupMessageAggregateStatus(messageId: String) {
+        val deliveries = groupMessageDao.getDeliveriesForMessage(messageId)
+        if (deliveries.isEmpty()) return
+        val aggregateStatus = when {
+            deliveries.all { it.status == MessageStatus.DELIVERED } -> MessageStatus.DELIVERED
+            deliveries.any { it.status == MessageStatus.SENT || it.status == MessageStatus.DELIVERED } -> MessageStatus.SENT
+            deliveries.all { it.status == MessageStatus.FAILED } -> MessageStatus.FAILED
+            else -> MessageStatus.QUEUED
+        }
+        val msg = groupMessageDao.findById(messageId)
+        if (msg != null && msg.status != aggregateStatus) {
+            groupMessageDao.updateMessage(msg.copy(status = aggregateStatus))
+        }
     }
 
     private suspend fun dispatchSingleOutboxMessage(message: MessageEntity): Boolean {
@@ -246,47 +381,94 @@ class PersistentMessageRepository @Inject constructor(
 
     override fun conversations(): Flow<List<ConversationSummary>> = combine(
         dao.getLatestMessagesPerConversation(),
+        groupDao.observeActiveGroups(),
+        groupMessageDao.getLatestMessagesPerGroup(),
         contacts.observe()
-    ) { latestMessages, contactEntities ->
+    ) { latestMessages, activeGroups, latestGroupMessages, contactEntities ->
         val contactNames = contactEntities.associateBy { it.contactId }
-        latestMessages.map { message ->
+        val directSummaries = latestMessages.map { message ->
             val conversationId = message.conversationId
             ConversationSummary(
                 id = conversationId,
                 contactName = contactNames[conversationId]?.displayName ?: "Contact ${conversationId.takeLast(8)}",
                 contactId = conversationId,
                 lastMessage = decryptBody(message),
-                lastMessageEpochMs = message.createdAtEpochMs
+                lastMessageEpochMs = message.createdAtEpochMs,
+                isGroup = false,
+                memberCount = 0
             )
-        }.sortedByDescending { it.lastMessageEpochMs }
+        }
+
+        val latestGroupByGroupId = latestGroupMessages.associateBy { it.groupId }
+        val groupSummaries = activeGroups.map { group ->
+            val latestMsg = latestGroupByGroupId[group.groupId]
+            val lastMsgText = if (latestMsg != null) {
+                decryptGroupBody(latestMsg)
+            } else {
+                "Group created"
+            }
+            val lastTime = latestMsg?.createdAtEpochMs ?: group.createdAtEpochMs
+            ConversationSummary(
+                id = group.groupId,
+                contactName = group.name,
+                contactId = group.groupId,
+                lastMessage = lastMsgText,
+                lastMessageEpochMs = lastTime,
+                isGroup = true,
+                memberCount = 0
+            )
+        }
+
+        (directSummaries + groupSummaries).sortedByDescending { it.lastMessageEpochMs }
     }
 
-    override fun messages(conversationId: String): Flow<List<ChatMessage>> =
-        dao.getMessagesForConversation(conversationId).map { entities -> entities.map { it.toModel() } }
+    override fun messages(conversationId: String): Flow<List<ChatMessage>> {
+        return if (conversationId.startsWith("group_")) {
+            groupMessageDao.observeMessagesForGroup(conversationId).map { entities ->
+                entities.map { entity ->
+                    entity.copy(body = decryptGroupBody(entity)).toModel()
+                }
+            }
+        } else {
+            dao.getMessagesForConversation(conversationId).map { entities ->
+                entities.map { entity ->
+                    entity.copy(body = decryptBody(entity)).toModel()
+                }
+            }
+        }
+    }
+
+    override fun isGroup(conversationId: String): Boolean {
+        return conversationId.startsWith("group_")
+    }
 
     override suspend fun send(
         conversationId: String,
         recipientId: String,
         text: String
     ): Result<ChatMessage> = withContext(Dispatchers.IO) {
-        runCatching {
-            require(text.isNotBlank()) { "Message cannot be empty" }
-            require(text.length <= 4_000) { "Message is too long" }
+        if (conversationId.startsWith("group_")) {
+            sendGroupText(conversationId, text)
+        } else {
+            runCatching {
+                require(text.isNotBlank()) { "Message cannot be empty" }
+                require(text.length <= 4_000) { "Message is too long" }
 
-            val contact = contacts.find(recipientId)
-                ?: error("Contact is not paired: scan or enter their invitation first")
-            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-            if (!sessions.hasSession(address)) {
-                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+                val contact = contacts.find(recipientId)
+                    ?: error("Contact is not paired: scan or enter their invitation first")
+                val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+                if (!sessions.hasSession(address)) {
+                    sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+                }
+                val trimmed = text.trim()
+                sendContent(
+                    conversationId = conversationId,
+                    recipientId = recipientId,
+                    address = address,
+                    plaintext = MessageContentCodec.encodeText(trimmed),
+                    body = trimmed
+                )
             }
-            val trimmed = text.trim()
-            sendContent(
-                conversationId = conversationId,
-                recipientId = recipientId,
-                address = address,
-                plaintext = MessageContentCodec.encodeText(trimmed),
-                body = trimmed
-            )
         }
     }
 
@@ -295,70 +477,295 @@ class PersistentMessageRepository @Inject constructor(
         recipientId: String,
         uri: Uri
     ): Result<ChatMessage> = withContext(Dispatchers.IO) {
-        runCatching {
-            val contact = contacts.find(recipientId)
-                ?: error("Contact is not paired: scan or enter their invitation first")
-            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-            if (!sessions.hasSession(address)) {
-                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
-            }
-
-            val fileSize = getUriFileSize(uri)
-            require(fileSize > 0) { "The selected attachment is empty" }
-            require(fileSize <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES) {
-                "Attachment exceeds the 5 GiB maximum limit"
-            }
-
-            if (fileSize > AttachmentStore.MAX_ATTACHMENT_BYTES) {
-                runCatching {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri,
-                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
+        if (conversationId.startsWith("group_")) {
+            sendGroupAttachment(conversationId, uri)
+        } else {
+            runCatching {
+                val contact = contacts.find(recipientId)
+                    ?: error("Contact is not paired: scan or enter their invitation first")
+                val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+                if (!sessions.hasSession(address)) {
+                    sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
                 }
 
-                val fileName = getUriFileName(uri)
-                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
-                val localId = identity.current()?.publicId ?: "self"
+                val fileSize = getUriFileSize(uri)
+                require(fileSize > 0) { "The selected attachment is empty" }
+                require(fileSize <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES) {
+                    "Attachment exceeds the 5 GiB maximum limit"
+                }
 
-                val (descriptor, _) = largeFileManager.prepareDescriptor(
-                    uri = uri,
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    senderId = localId,
-                    recipientId = contact.contactId
-                ).getOrThrow()
+                if (fileSize > AttachmentStore.MAX_ATTACHMENT_BYTES) {
+                    runCatching {
+                        context.contentResolver.takePersistableUriPermission(
+                            uri,
+                            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    }
 
-                sendContent(
-                    conversationId = conversationId,
-                    recipientId = recipientId,
-                    address = address,
-                    plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
-                    body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
-                    attachmentFileName = descriptor.fileName,
-                    attachmentMimeType = descriptor.mimeType,
-                    attachmentStoragePath = "large_file:${descriptor.fileId}",
-                    attachmentSizeBytes = descriptor.fileSize,
-                    attachmentSha256 = descriptor.sha256
-                )
-            } else {
-                val input = attachmentStore.read(uri)
-                require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
-                val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
-                sendContent(
-                    conversationId = conversationId,
-                    recipientId = recipientId,
-                    address = address,
-                    plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
-                    body = "Attachment: ${input.fileName}",
-                    attachmentFileName = input.fileName,
-                    attachmentMimeType = input.mimeType,
-                    attachmentStoragePath = stored.path,
-                    attachmentSizeBytes = stored.size,
-                    attachmentSha256 = stored.sha256
-                )
+                    val fileName = getUriFileName(uri)
+                    val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                    val localId = identity.current()?.publicId ?: "self"
+
+                    val (descriptor, _) = largeFileManager.prepareDescriptor(
+                        uri = uri,
+                        fileName = fileName,
+                        mimeType = mimeType,
+                        senderId = localId,
+                        recipientId = contact.contactId
+                    ).getOrThrow()
+
+                    sendContent(
+                        conversationId = conversationId,
+                        recipientId = recipientId,
+                        address = address,
+                        plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
+                        body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
+                        attachmentFileName = descriptor.fileName,
+                        attachmentMimeType = descriptor.mimeType,
+                        attachmentStoragePath = "large_file:${descriptor.fileId}",
+                        attachmentSizeBytes = descriptor.fileSize,
+                        attachmentSha256 = descriptor.sha256
+                    )
+                } else {
+                    val input = attachmentStore.read(uri)
+                    require(input.bytes.isNotEmpty()) { "The selected attachment is empty" }
+                    val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
+                    sendContent(
+                        conversationId = conversationId,
+                        recipientId = recipientId,
+                        address = address,
+                        plaintext = MessageContentCodec.encodeAttachment(input.fileName, input.mimeType, input.bytes),
+                        body = "Attachment: ${input.fileName}",
+                        attachmentFileName = input.fileName,
+                        attachmentMimeType = input.mimeType,
+                        attachmentStoragePath = stored.path,
+                        attachmentSizeBytes = stored.size,
+                        attachmentSha256 = stored.sha256
+                    )
+                }
             }
         }
+    }
+
+    override suspend fun createGroup(name: String, memberContactIds: List<String>): Result<String> = withContext(Dispatchers.IO) {
+        val createResult = groupManager.createGroup(name, memberContactIds)
+        createResult.fold(
+            onSuccess = { (group, invitePayload) ->
+                broadcastGroupInvite(invitePayload)
+                Result.success(group.groupId)
+            },
+            onFailure = { Result.failure(it) }
+        )
+    }
+
+    override suspend fun leaveGroup(groupId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val leaveResult = groupManager.leaveGroup(groupId)
+        leaveResult.fold(
+            onSuccess = { leavePayload ->
+                broadcastGroupLeave(leavePayload)
+                Result.success(Unit)
+            },
+            onFailure = { Result.failure(it) }
+        )
+    }
+
+    private suspend fun broadcastGroupInvite(invite: MessageContentCodec.GroupInvitePayload) {
+        val localId = identity.current()?.publicId ?: return
+        val encodedInvite = MessageContentCodec.encodeGroupInvite(invite)
+        val members = invite.memberIds.filter { it != localId }
+        val senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+
+        for (memberId in members) {
+            runCatching {
+                val contact = contacts.find(memberId) ?: return@runCatching
+                val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+                if (!sessions.hasSession(address)) {
+                    sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+                }
+                val ciphertext = sessions.encryptMessage(address, encodedInvite)
+                val envelope = OutboundEnvelope(
+                    protocolVersion = 2,
+                    messageId = UUID.randomUUID().toString(),
+                    recipientId = contact.contactId,
+                    senderId = localId,
+                    createdAtEpochMs = System.currentTimeMillis(),
+                    expiresAtEpochMs = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L,
+                    hopLimit = 3,
+                    encryptedPayload = ciphertext.serialize(),
+                    testOnly = false,
+                    senderInvitation = senderInvitation
+                )
+                router.route(envelope)
+            }
+        }
+    }
+
+    private suspend fun broadcastGroupLeave(leave: MessageContentCodec.GroupLeavePayload) {
+        val localId = identity.current()?.publicId ?: return
+        val encodedLeave = MessageContentCodec.encodeGroupLeave(leave)
+        val members = groupDao.getActiveMembers(leave.groupId).filter { it.memberPublicId != localId }
+        val senderInvitation = invitationService.createInvitation().getOrNull() ?: ""
+
+        for (member in members) {
+            runCatching {
+                val contact = contacts.find(member.memberPublicId) ?: return@runCatching
+                val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+                if (!sessions.hasSession(address)) {
+                    sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+                }
+                val ciphertext = sessions.encryptMessage(address, encodedLeave)
+                val envelope = OutboundEnvelope(
+                    protocolVersion = 2,
+                    messageId = UUID.randomUUID().toString(),
+                    recipientId = contact.contactId,
+                    senderId = localId,
+                    createdAtEpochMs = System.currentTimeMillis(),
+                    expiresAtEpochMs = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L,
+                    hopLimit = 3,
+                    encryptedPayload = ciphertext.serialize(),
+                    testOnly = false,
+                    senderInvitation = senderInvitation
+                )
+                router.route(envelope)
+            }
+        }
+    }
+
+    private suspend fun sendGroupText(
+        groupId: String,
+        text: String,
+        isForwarded: Boolean = false
+    ): Result<ChatMessage> = runCatching {
+        require(text.isNotBlank()) { "Message cannot be empty" }
+        require(text.length <= 4_000) { "Message is too long" }
+        val group = groupDao.findGroupById(groupId) ?: error("Group not found")
+        require(group.isActive) { "Cannot send to a group you have left" }
+
+        val localId = identity.current()?.publicId ?: error("Local identity is unavailable")
+        val messageId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val trimmed = text.trim()
+
+        val groupMessage = org.ciphrchat.app.data.GroupMessageEntity(
+            id = messageId,
+            groupId = groupId,
+            senderId = localId,
+            body = contentCipher.encrypt(trimmed),
+            createdAtEpochMs = now,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.QUEUED,
+            selectedTransport = null,
+            attachmentFileName = null,
+            attachmentMimeType = null,
+            attachmentStoragePath = null,
+            attachmentSizeBytes = 0L,
+            attachmentSha256 = null,
+            isForwarded = isForwarded
+        )
+        groupMessageDao.insertMessage(groupMessage)
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(messageId, trimmed)
+        }
+
+        val members = groupDao.getActiveMembers(groupId).filter { it.memberPublicId != localId }
+        if (members.isEmpty()) {
+            groupMessageDao.updateMessage(groupMessage.copy(status = MessageStatus.DELIVERED))
+        } else {
+            val deliveries = members.map { member ->
+                org.ciphrchat.app.data.GroupRecipientDeliveryEntity(
+                    groupMessageId = messageId,
+                    recipientPublicId = member.memberPublicId,
+                    status = MessageStatus.QUEUED,
+                    selectedTransport = null,
+                    attempts = 0,
+                    lastAttemptEpochMs = 0L
+                )
+            }
+            groupMessageDao.insertDeliveries(deliveries)
+        }
+
+        groupDao.updateGroup(group.copy(updatedAtEpochMs = now))
+        triggerOutboxFlush()
+        groupMessage.copy(body = trimmed).toModel()
+    }
+
+    private suspend fun sendGroupAttachment(
+        groupId: String,
+        uri: Uri
+    ): Result<ChatMessage> = runCatching {
+        val group = groupDao.findGroupById(groupId) ?: error("Group not found")
+        require(group.isActive) { "Cannot send to a group you have left" }
+
+        val fileSize = getUriFileSize(uri)
+        require(fileSize > 0) { "The selected attachment is empty" }
+        require(fileSize <= FileTransferDescriptor.MAX_FILE_SIZE_BYTES) {
+            "Attachment exceeds the 5 GiB maximum limit"
+        }
+
+        val localId = identity.current()?.publicId ?: error("Local identity is unavailable")
+        val fileName = getUriFileName(uri)
+        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+        val messageId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        val isVideoOrLargeFile = fileSize > AttachmentStore.MAX_ATTACHMENT_BYTES || mimeType.startsWith("video/")
+        val (storedPath, sha256) = if (!isVideoOrLargeFile) {
+            val input = attachmentStore.read(uri)
+            val stored = attachmentStore.save(input.fileName, input.mimeType, input.bytes)
+            Pair(stored.path, stored.sha256)
+        } else {
+            val (descriptor, _) = largeFileManager.prepareDescriptor(
+                uri = uri,
+                fileName = fileName,
+                mimeType = mimeType,
+                senderId = localId,
+                recipientId = groupId
+            ).getOrThrow()
+            Pair("large_file:${descriptor.fileId}", descriptor.sha256)
+        }
+
+        val plainText = if (isVideoOrLargeFile) "Large File: $fileName" else "Attachment: $fileName"
+        val groupMessage = org.ciphrchat.app.data.GroupMessageEntity(
+            id = messageId,
+            groupId = groupId,
+            senderId = localId,
+            body = contentCipher.encrypt(plainText),
+            createdAtEpochMs = now,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.QUEUED,
+            selectedTransport = null,
+            attachmentFileName = fileName,
+            attachmentMimeType = mimeType,
+            attachmentStoragePath = storedPath,
+            attachmentSizeBytes = fileSize,
+            attachmentSha256 = sha256,
+            isForwarded = false
+        )
+        groupMessageDao.insertMessage(groupMessage)
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(messageId, plainText)
+        }
+
+        val members = groupDao.getActiveMembers(groupId).filter { it.memberPublicId != localId }
+        if (members.isEmpty()) {
+            groupMessageDao.updateMessage(groupMessage.copy(status = MessageStatus.DELIVERED))
+        } else {
+            val deliveries = members.map { member ->
+                org.ciphrchat.app.data.GroupRecipientDeliveryEntity(
+                    groupMessageId = messageId,
+                    recipientPublicId = member.memberPublicId,
+                    status = MessageStatus.QUEUED,
+                    selectedTransport = null,
+                    attempts = 0,
+                    lastAttemptEpochMs = 0L
+                )
+            }
+            groupMessageDao.insertDeliveries(deliveries)
+        }
+
+        groupDao.updateGroup(group.copy(updatedAtEpochMs = now))
+        triggerOutboxFlush()
+        groupMessage.copy(body = plainText).toModel()
     }
 
     override suspend fun getOrDownloadLargeFile(message: ChatMessage): File? = withContext(Dispatchers.IO) {
@@ -394,16 +801,43 @@ class PersistentMessageRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 require(conversationId.isNotBlank()) { "Conversation is unavailable" }
-                val messages = dao.listMessagesForConversation(conversationId)
-                val deleted = dao.deleteConversation(conversationId)
-                synchronized(decryptedBodyCache) {
-                    messages.forEach { decryptedBodyCache.remove(it.id) }
+                if (conversationId.startsWith("group_")) {
+                    val messages = groupMessageDao.listMessagesForGroup(conversationId)
+                    synchronized(decryptedBodyCache) {
+                        messages.forEach { decryptedBodyCache.remove(it.id) }
+                    }
+                    messages.mapNotNull { it.attachmentStoragePath }
+                        .filter { !it.startsWith("large_file:") }
+                        .distinct()
+                        .forEach { path ->
+                            val refs = dao.countOtherReferencesToAttachment(path, "") +
+                                groupMessageDao.countOtherReferencesToAttachment(path, "")
+                            if (refs <= 1) {
+                                attachmentStore.delete(path)
+                            }
+                        }
+                    messages.forEach { msg ->
+                        groupMessageDao.deleteDeliveriesForMessage(msg.id)
+                    }
+                    groupMessageDao.deleteMessagesForGroup(conversationId)
+                } else {
+                    val messages = dao.listMessagesForConversation(conversationId)
+                    val deleted = dao.deleteConversation(conversationId)
+                    synchronized(decryptedBodyCache) {
+                        messages.forEach { decryptedBodyCache.remove(it.id) }
+                    }
+                    messages.mapNotNull { it.attachmentStoragePath }
+                        .filter { !it.startsWith("large_file:") }
+                        .distinct()
+                        .forEach { path ->
+                            val refs = dao.countOtherReferencesToAttachment(path, "") +
+                                groupMessageDao.countOtherReferencesToAttachment(path, "")
+                            if (refs <= 1) {
+                                attachmentStore.delete(path)
+                            }
+                        }
+                    deleted
                 }
-                messages.mapNotNull { it.attachmentStoragePath }
-                    .filter { !it.startsWith("large_file:") }
-                    .distinct()
-                    .forEach(attachmentStore::delete)
-                deleted
             }
         }
 
@@ -411,19 +845,37 @@ class PersistentMessageRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 require(messageId.isNotBlank()) { "Message ID is required" }
-                val message = dao.findById(messageId) ?: return@runCatching
-                val path = message.attachmentStoragePath
-                if (!path.isNullOrBlank() && !path.startsWith("large_file:")) {
-                    val references = dao.countOtherReferencesToAttachment(path, messageId)
-                    if (references == 0) {
-                        attachmentStore.delete(path)
-                    }
-                }
-                dao.deleteMessageById(messageId)
                 synchronized(decryptedBodyCache) {
                     decryptedBodyCache.remove(messageId)
                 }
-                Unit
+                val directMsg = dao.findById(messageId)
+                if (directMsg != null) {
+                    val path = directMsg.attachmentStoragePath
+                    if (!path.isNullOrBlank() && !path.startsWith("large_file:")) {
+                        val references = dao.countOtherReferencesToAttachment(path, messageId) +
+                            groupMessageDao.countOtherReferencesToAttachment(path, messageId)
+                        if (references == 0) {
+                            attachmentStore.delete(path)
+                        }
+                    }
+                    dao.deleteMessageById(messageId)
+                    return@runCatching
+                }
+
+                val groupMsg = groupMessageDao.findById(messageId)
+                if (groupMsg != null) {
+                    val path = groupMsg.attachmentStoragePath
+                    if (!path.isNullOrBlank() && !path.startsWith("large_file:")) {
+                        val references = dao.countOtherReferencesToAttachment(path, messageId) +
+                            groupMessageDao.countOtherReferencesToAttachment(path, messageId)
+                        if (references == 0) {
+                            attachmentStore.delete(path)
+                        }
+                    }
+                    groupMessageDao.deleteDeliveriesForMessage(messageId)
+                    groupMessageDao.deleteMessageById(messageId)
+                    return@runCatching
+                }
             }
         }
 
@@ -431,12 +883,24 @@ class PersistentMessageRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             runCatching {
                 require(messageId.isNotBlank()) { "Message ID is required" }
-                val message = dao.findById(messageId) ?: error("Message not found")
-                if (message.status == MessageStatus.DELIVERED || message.status == MessageStatus.SENT) {
+                val directMsg = dao.findById(messageId)
+                if (directMsg != null) {
+                    if (directMsg.status != MessageStatus.DELIVERED && directMsg.status != MessageStatus.SENT) {
+                        dao.updateMessage(directMsg.copy(status = MessageStatus.QUEUED))
+                        triggerOutboxFlush()
+                    }
                     return@runCatching
                 }
-                dao.updateMessage(message.copy(status = MessageStatus.QUEUED))
-                triggerOutboxFlush()
+
+                val groupMsg = groupMessageDao.findById(messageId)
+                if (groupMsg != null) {
+                    if (groupMsg.status != MessageStatus.DELIVERED && groupMsg.status != MessageStatus.SENT) {
+                        groupMessageDao.requeueFailedDeliveriesForMessage(messageId)
+                        groupMessageDao.updateMessage(groupMsg.copy(status = MessageStatus.QUEUED))
+                        triggerOutboxFlush()
+                    }
+                    return@runCatching
+                }
             }
         }
 
@@ -446,77 +910,136 @@ class PersistentMessageRepository @Inject constructor(
         originalMessage: ChatMessage
     ): Result<ChatMessage> = withContext(Dispatchers.IO) {
         runCatching {
-            require(targetConversationId.isNotBlank() && targetRecipientId.isNotBlank()) {
-                "Target conversation and recipient are required"
+            require(targetConversationId.isNotBlank()) {
+                "Target conversation is required"
             }
-            val contact = contacts.find(targetRecipientId)
-                ?: error("Contact is not paired: scan or enter their invitation first")
-            val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-            if (!sessions.hasSession(address)) {
-                sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
-            }
-
-            val path = originalMessage.attachmentStoragePath
-            val fileName = originalMessage.attachmentFileName
-            if (fileName != null && path != null) {
-                if (path.startsWith("large_file:")) {
-                    val fileId = path.removePrefix("large_file:")
-                    val descriptor = largeFileManager.findDescriptorByFileId(fileId)
-                    if (descriptor != null) {
-                        sendContent(
-                            conversationId = targetConversationId,
-                            recipientId = targetRecipientId,
-                            address = address,
-                            plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
-                            body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
-                            attachmentFileName = descriptor.fileName,
-                            attachmentMimeType = descriptor.mimeType,
-                            attachmentStoragePath = path,
-                            attachmentSizeBytes = descriptor.fileSize,
-                            attachmentSha256 = descriptor.sha256,
-                            isForwarded = true
-                        )
-                    } else {
-                        error("Large file descriptor is unavailable")
-                    }
-                } else {
-                    val materialized = attachmentStore.materialize(path, fileName)
-                    val bytes = materialized.readBytes()
-                    val stored = attachmentStore.save(
-                        fileName,
-                        originalMessage.attachmentMimeType ?: "application/octet-stream",
-                        bytes
-                    )
-                    sendContent(
-                        conversationId = targetConversationId,
-                        recipientId = targetRecipientId,
-                        address = address,
-                        plaintext = MessageContentCodec.encodeAttachment(
-                            fileName,
-                            originalMessage.attachmentMimeType ?: "application/octet-stream",
-                            bytes
-                        ),
-                        body = originalMessage.body,
-                        attachmentFileName = fileName,
-                        attachmentMimeType = originalMessage.attachmentMimeType,
-                        attachmentStoragePath = stored.path,
-                        attachmentSizeBytes = stored.size,
-                        attachmentSha256 = stored.sha256,
-                        isForwarded = true
-                    )
-                }
+            if (targetConversationId.startsWith("group_")) {
+                forwardToGroup(targetConversationId, originalMessage)
             } else {
-                val text = originalMessage.body
-                require(text.isNotBlank()) { "Message cannot be empty" }
+                forwardToDirect(targetConversationId, targetRecipientId, originalMessage)
+            }
+        }
+    }
+
+    private suspend fun forwardToGroup(
+        groupId: String,
+        originalMessage: ChatMessage
+    ): ChatMessage {
+        val group = groupDao.findGroupById(groupId) ?: error("Group not found")
+        require(group.isActive) { "Cannot send to a group you have left" }
+        val localId = identity.current()?.publicId ?: error("Local identity is unavailable")
+        val messageId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+
+        val text = originalMessage.body
+        val groupMessage = org.ciphrchat.app.data.GroupMessageEntity(
+            id = messageId,
+            groupId = groupId,
+            senderId = localId,
+            body = contentCipher.encrypt(text),
+            createdAtEpochMs = now,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.QUEUED,
+            selectedTransport = null,
+            attachmentFileName = originalMessage.attachmentFileName,
+            attachmentMimeType = originalMessage.attachmentMimeType,
+            attachmentStoragePath = originalMessage.attachmentStoragePath,
+            attachmentSizeBytes = originalMessage.attachmentSizeBytes,
+            attachmentSha256 = originalMessage.attachmentSha256,
+            isForwarded = true
+        )
+        groupMessageDao.insertMessage(groupMessage)
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(messageId, text)
+        }
+
+        val members = groupDao.getActiveMembers(groupId).filter { it.memberPublicId != localId }
+        if (members.isEmpty()) {
+            groupMessageDao.updateMessage(groupMessage.copy(status = MessageStatus.DELIVERED))
+        } else {
+            val deliveries = members.map { member ->
+                org.ciphrchat.app.data.GroupRecipientDeliveryEntity(
+                    groupMessageId = messageId,
+                    recipientPublicId = member.memberPublicId,
+                    status = MessageStatus.QUEUED,
+                    selectedTransport = null,
+                    attempts = 0,
+                    lastAttemptEpochMs = 0L
+                )
+            }
+            groupMessageDao.insertDeliveries(deliveries)
+        }
+
+        groupDao.updateGroup(group.copy(updatedAtEpochMs = now))
+        triggerOutboxFlush()
+        return groupMessage.copy(body = text).toModel()
+    }
+
+    private suspend fun forwardToDirect(
+        targetConversationId: String,
+        targetRecipientId: String,
+        originalMessage: ChatMessage
+    ): ChatMessage {
+        val contact = contacts.find(targetRecipientId)
+            ?: error("Contact is not paired: scan or enter their invitation first")
+        val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
+        if (!sessions.hasSession(address)) {
+            sessions.processPreKeyBundle(address, InvitationCodec.toBundle(contact))
+        }
+
+        val path = originalMessage.attachmentStoragePath
+        val fileName = originalMessage.attachmentFileName
+        return if (fileName != null && path != null) {
+            if (path.startsWith("large_file:")) {
+                val fileId = path.removePrefix("large_file:")
+                val descriptor = largeFileManager.findDescriptorByFileId(fileId)
+                    ?: error("Large file descriptor is unavailable")
                 sendContent(
                     conversationId = targetConversationId,
                     recipientId = targetRecipientId,
                     address = address,
-                    plaintext = MessageContentCodec.encodeText(text),
-                    body = text,
+                    plaintext = MessageContentCodec.encodeFileDescriptor(descriptor),
+                    body = "Large File: ${descriptor.fileName} (${formatBytes(descriptor.fileSize)})",
+                    attachmentFileName = descriptor.fileName,
+                    attachmentMimeType = descriptor.mimeType,
+                    attachmentStoragePath = path,
+                    attachmentSizeBytes = descriptor.fileSize,
+                    attachmentSha256 = descriptor.sha256,
+                    isForwarded = true
+                )
+            } else {
+                val bytes = runCatching {
+                    attachmentStore.materialize(path, fileName).readBytes()
+                }.getOrNull() ?: error("Attachment file missing")
+                sendContent(
+                    conversationId = targetConversationId,
+                    recipientId = targetRecipientId,
+                    address = address,
+                    plaintext = MessageContentCodec.encodeAttachment(
+                        fileName,
+                        originalMessage.attachmentMimeType ?: "application/octet-stream",
+                        bytes
+                    ),
+                    body = originalMessage.body,
+                    attachmentFileName = fileName,
+                    attachmentMimeType = originalMessage.attachmentMimeType,
+                    attachmentStoragePath = path,
+                    attachmentSizeBytes = originalMessage.attachmentSizeBytes,
+                    attachmentSha256 = originalMessage.attachmentSha256,
                     isForwarded = true
                 )
             }
+        } else {
+            val text = originalMessage.body
+            require(text.isNotBlank()) { "Message cannot be empty" }
+            sendContent(
+                conversationId = targetConversationId,
+                recipientId = targetRecipientId,
+                address = address,
+                plaintext = MessageContentCodec.encodeText(text),
+                body = text,
+                isForwarded = true
+            )
         }
     }
 
@@ -607,6 +1130,19 @@ class PersistentMessageRepository @Inject constructor(
         return decrypted
     }
 
+    private fun decryptGroupBody(entity: org.ciphrchat.app.data.GroupMessageEntity): String {
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.get(entity.id)?.let { return it }
+        }
+        val decrypted = runCatching {
+            contentCipher.decrypt(entity.body)
+        }.getOrElse { "Encrypted message" }
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(entity.id, decrypted)
+        }
+        return decrypted
+    }
+
     private suspend fun receive(peerId: String, wirePayload: ByteArray): Boolean =
         runCatching {
             val receiveStart = System.currentTimeMillis()
@@ -638,7 +1174,7 @@ class PersistentMessageRepository @Inject constructor(
                 "Invalid encrypted payload"
             }
             val address = SignalProtocolAddress(contact.contactId, contact.deviceId)
-            if (dao.findById(messageId) != null) {
+            if (dao.findById(messageId) != null || groupMessageDao.findById(messageId) != null) {
                 sendDeliveryReceipt(contact, messageId, localId)
                 return@runCatching true
             }
@@ -658,6 +1194,23 @@ class PersistentMessageRepository @Inject constructor(
         require(contact.contactId == receipt.optString("senderId")) { "Delivery receipt sender mismatch" }
         val messageId = receipt.optString("messageId")
         require(messageId.isNotBlank()) { "Delivery receipt message ID is missing" }
+
+        if (messageId.contains("_")) {
+            val parts = messageId.split("_")
+            if (parts.size >= 2) {
+                val groupMessageId = parts[0]
+                val recipientId = parts[1]
+                val delivery = groupMessageDao.getDelivery(groupMessageId, recipientId)
+                if (delivery != null) {
+                    groupMessageDao.updateDelivery(delivery.copy(status = MessageStatus.DELIVERED))
+                    updateGroupMessageAggregateStatus(groupMessageId)
+                    val receiptDuration = System.currentTimeMillis() - receiptStart
+                    MessageTimingTracker.recordReceipt(groupMessageId, receiptDuration)
+                    return
+                }
+            }
+        }
+
         val message = dao.findById(messageId) ?: return
         require(message.recipientId == contact.contactId) { "Delivery receipt does not match the recipient" }
         dao.updateMessage(message.copy(status = MessageStatus.DELIVERED))
@@ -743,6 +1296,73 @@ class PersistentMessageRepository @Inject constructor(
         return invited
     }
 
+    private suspend fun handleIncomingGroupMessage(
+        groupMsg: MessageContentCodec.GroupMessagePayload,
+        senderId: String,
+        ciphertext: ByteArray,
+        createdAtEpochMs: Long,
+        transport: String
+    ) {
+        val localId = identity.current()?.publicId ?: "local"
+        // 1. Idempotency: If message already received, acknowledge and return
+        if (groupMessageDao.findById(groupMsg.groupMessageId) != null) {
+            val contact = contacts.find(senderId)
+            if (contact != null) {
+                sendDeliveryReceipt(contact, "${groupMsg.groupMessageId}_$localId", localId)
+            }
+            return
+        }
+
+        // 2. Validate group and membership
+        val group = groupDao.findGroupById(groupMsg.groupId) ?: return
+        val members = groupDao.getMembers(groupMsg.groupId)
+        val senderMember = members.find { it.memberPublicId == senderId && it.membershipState == "ACTIVE" }
+        if (senderMember == null && group.creatorPublicId != senderId) {
+            return
+        }
+
+        // 3. Attachment / File
+        val attachment = groupMsg.attachment
+        val stored = attachment?.let {
+            require(it.bytes.size <= AttachmentStore.MAX_ATTACHMENT_BYTES) { "Attachment exceeds supported size" }
+            attachmentStore.save(it.fileName, it.mimeType, it.bytes)
+        }
+
+        groupMsg.fileDescriptor?.let { desc ->
+            largeFileManager.registerDescriptor(desc)
+        }
+
+        val plainText = groupMsg.text ?: (if (groupMsg.fileDescriptor != null) "Large File: ${groupMsg.fileDescriptor.fileName}" else "Attachment: ${attachment?.fileName ?: "file"}")
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(groupMsg.groupMessageId, plainText)
+        }
+
+        val entity = org.ciphrchat.app.data.GroupMessageEntity(
+            id = groupMsg.groupMessageId,
+            groupId = groupMsg.groupId,
+            senderId = groupMsg.senderId,
+            body = contentCipher.encrypt(plainText),
+            createdAtEpochMs = createdAtEpochMs,
+            direction = MessageDirection.INCOMING,
+            status = MessageStatus.DELIVERED,
+            selectedTransport = transport,
+            attachmentFileName = attachment?.fileName ?: groupMsg.fileDescriptor?.fileName,
+            attachmentMimeType = attachment?.mimeType ?: groupMsg.fileDescriptor?.mimeType,
+            attachmentStoragePath = stored?.path ?: groupMsg.fileDescriptor?.let { "large_file:${it.fileId}" },
+            attachmentSizeBytes = stored?.size ?: groupMsg.fileDescriptor?.fileSize ?: 0L,
+            attachmentSha256 = stored?.sha256 ?: groupMsg.fileDescriptor?.sha256,
+            isForwarded = groupMsg.isForwarded
+        )
+        groupMessageDao.insertMessage(entity)
+        groupDao.updateGroup(group.copy(updatedAtEpochMs = createdAtEpochMs))
+
+        // 4. Send delivery receipt back to sender
+        val contact = contacts.find(senderId)
+        if (contact != null) {
+            sendDeliveryReceipt(contact, "${groupMsg.groupMessageId}_$localId", localId)
+        }
+    }
+
     private suspend fun persistIncoming(
         messageId: String,
         senderId: String,
@@ -752,6 +1372,21 @@ class PersistentMessageRepository @Inject constructor(
         transport: String
     ) {
         val decoded = MessageContentCodec.decode(plaintext)
+
+        decoded.groupInvite?.let { invite ->
+            groupManager.handleIncomingInvite(invite, senderId)
+            return
+        }
+
+        decoded.groupLeave?.let { leave ->
+            groupManager.handleIncomingLeave(leave, senderId)
+            return
+        }
+
+        decoded.groupMessage?.let { groupMsg ->
+            handleIncomingGroupMessage(groupMsg, senderId, ciphertext, createdAtEpochMs, transport)
+            return
+        }
 
         decoded.callSignalJson?.let { signalJson ->
             val signal = CallSignal.fromJson(signalJson)
