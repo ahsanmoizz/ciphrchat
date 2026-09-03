@@ -15,8 +15,20 @@ CiphrChat is an open-source Android messaging app built around a persistent loca
 
 Click the button above, open the downloaded `android-debug.apk` on your Android phone, and tap **Install**. Android may ask you to allow your browser or file manager to install apps from this source; allow it once and return to the installer.
 
-This download always points to the newest build. You do not need to open GitHub Actions or download the source code. The [release page](https://github.com/ahsanmoizz/ciphrchat/releases/tag/latest) is available if you want the build details and checksum.
+This download always points to the newest stable build. You do not need to open GitHub Actions or download the source code. The [release page](https://github.com/ahsanmoizz/ciphrchat/releases/tag/latest) is available if you want the build details and checksum.
 
+### 🧪 Experimental stabilization build
+
+<p>
+  <a href="https://github.com/ahsanmoizz/ciphrchat/releases/download/experimental-665e86c/CiphrChat-Experimental-665e86c.apk">
+    <strong>Install Experimental Build</strong>
+  </a>
+</p>
+
+> **Experimental:** This candidate contains the latest messaging, calling, performance, message actions, forwarding, and encrypted group-chat stabilization work. It is undergoing two-device validation and has **not** replaced the stable build above.
+
+**Candidate source:** `665e86ce8b243eb8d3379ca489738226f3d9cdc3`
+**APK SHA-256:** `E9DD02E7B238126A6A1181B7CB8117A43E0C4B673867643FE222751945E61DE0`
 You can install it with Android Debug Bridge as well:
 
 ```bash
