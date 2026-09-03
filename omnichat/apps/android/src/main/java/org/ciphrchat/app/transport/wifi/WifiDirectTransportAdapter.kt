@@ -3,7 +3,15 @@ package org.ciphrchat.app.transport.wifi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.ciphrchat.app.transport.*
+import org.ciphrchat.app.transport.DiscoveredPeer
+import org.ciphrchat.app.transport.OutboundEnvelope
+import org.ciphrchat.app.transport.Reachability
+import org.ciphrchat.app.transport.SendResult
+import org.ciphrchat.app.transport.TransportAdapter
+import org.ciphrchat.app.transport.TransportAvailability
+import org.ciphrchat.app.transport.TransportCapability
+import org.ciphrchat.app.transport.TransportKind
+import org.ciphrchat.app.transport.TransportState
 import org.ciphrchat.app.transport.lan.LanConnection
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,6 +37,9 @@ class WifiDirectTransportAdapter @Inject constructor(
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
+        if (_state.value.availability == TransportAvailability.AVAILABLE) {
+            return Result.success(Unit)
+        }
         return runCatching {
             if (!wifiDirectManager.start()) {
                 error("Wi-Fi Direct is unavailable or nearby permission is missing")
@@ -54,7 +65,7 @@ class WifiDirectTransportAdapter @Inject constructor(
 
     override suspend fun canReach(recipientId: String): Reachability {
         val peer = wifiDirectManager.discoveredPeers.value.find { it.id == recipientId }
-        return if (peer != null) Reachability.Reachable else Reachability.Unreachable("Peer not discovered")
+        return if (peer != null) Reachability.Reachable else Reachability.Unknown
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

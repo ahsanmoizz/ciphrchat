@@ -3,7 +3,15 @@ package org.ciphrchat.app.transport.lan
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.ciphrchat.app.transport.*
+import org.ciphrchat.app.transport.DiscoveredPeer
+import org.ciphrchat.app.transport.OutboundEnvelope
+import org.ciphrchat.app.transport.Reachability
+import org.ciphrchat.app.transport.SendResult
+import org.ciphrchat.app.transport.TransportAdapter
+import org.ciphrchat.app.transport.TransportAvailability
+import org.ciphrchat.app.transport.TransportCapability
+import org.ciphrchat.app.transport.TransportKind
+import org.ciphrchat.app.transport.TransportState
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,6 +33,9 @@ class LanTransportAdapter @Inject constructor(
     override val state: StateFlow<TransportState> = _state.asStateFlow()
 
     override suspend fun start(): Result<Unit> {
+        if (_state.value.availability == TransportAvailability.AVAILABLE) {
+            return Result.success(Unit)
+        }
         return runCatching {
             val port = LAN_PORT
             lanConnection.startServer(port)
@@ -48,7 +59,7 @@ class LanTransportAdapter @Inject constructor(
 
     override suspend fun canReach(recipientId: String): Reachability {
         val serviceInfo = lanDiscovery.getResolvedService(recipientId)
-        return if (serviceInfo != null) Reachability.Reachable else Reachability.Unreachable("Peer not discovered on LAN")
+        return if (serviceInfo != null) Reachability.Reachable else Reachability.Unknown
     }
 
     override suspend fun send(envelope: OutboundEnvelope): SendResult {

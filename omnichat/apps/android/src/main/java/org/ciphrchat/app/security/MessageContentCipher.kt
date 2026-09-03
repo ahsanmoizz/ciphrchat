@@ -16,6 +16,8 @@ import javax.inject.Singleton
 @Singleton
 class MessageContentCipher @Inject constructor() {
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    @Volatile private var cachedKey: SecretKey? = null
+    @Volatile private var cachedLegacyKey: SecretKey? = null
 
     fun encrypt(value: String): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -39,14 +41,19 @@ class MessageContentCipher @Inject constructor() {
     }
 
     private fun key(): SecretKey {
+        cachedKey?.let { return it }
         val existing = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
-        if (existing != null) return existing
-        return generateKey(KEY_ALIAS)
+        val key = existing ?: generateKey(KEY_ALIAS)
+        cachedKey = key
+        return key
     }
 
     private fun legacyKey(): SecretKey {
-        return keyStore.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
+        cachedLegacyKey?.let { return it }
+        val key = keyStore.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
             ?: error("Legacy message content key is unavailable")
+        cachedLegacyKey = key
+        return key
     }
 
     private fun generateKey(alias: String): SecretKey {

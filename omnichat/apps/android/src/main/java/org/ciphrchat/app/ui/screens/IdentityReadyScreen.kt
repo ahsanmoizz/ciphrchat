@@ -91,7 +91,7 @@ fun IdentityReadyScreen(
 
                 var qrBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
                 LaunchedEffect(fingerprint) {
-                    val bmp = org.ciphrchat.app.identity.QrCodeGenerator.generate(
+                    val bmp = org.ciphrchat.app.identity.QrCodeGenerator.generateAsync(
                         qrContent ?: "ciphr:$fingerprint", 400
                     )
                     qrBitmap = bmp?.asImageBitmap()

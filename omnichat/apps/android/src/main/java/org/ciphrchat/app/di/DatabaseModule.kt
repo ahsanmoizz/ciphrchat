@@ -69,6 +69,13 @@ object DatabaseModule {
         }
     }
 
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_messages_conversationId_createdAtEpochMs ON messages(conversationId, createdAtEpochMs)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_messages_status ON messages(status)")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideAppDatabase(
@@ -90,6 +97,7 @@ object DatabaseModule {
         .addMigrations(MIGRATION_4_5)
         .addMigrations(MIGRATION_5_6)
         .addMigrations(MIGRATION_6_7)
+        .addMigrations(MIGRATION_7_8)
         .build()
     }
 }

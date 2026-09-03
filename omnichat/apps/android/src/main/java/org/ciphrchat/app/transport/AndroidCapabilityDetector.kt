@@ -240,6 +240,16 @@ class AndroidCapabilityDetector @Inject constructor(
     private val context: Context
 ) {
     private val pm: PackageManager get() = context.packageManager
+    private val hasWifi by lazy { pm.hasSystemFeature(PackageManager.FEATURE_WIFI) }
+    private val hasWifiDirect by lazy { pm.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT) }
+    private val hasWifiAware by lazy { Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && pm.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE) }
+    private val hasBluetoothLe by lazy { pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) }
+    private val hasNfc by lazy { pm.hasSystemFeature(PackageManager.FEATURE_NFC) }
+    private val hasNfcHostCardEmulation by lazy { pm.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION) }
+    private val hasUwb by lazy { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && pm.hasSystemFeature(PackageManager.FEATURE_UWB) }
+    private val hasCamera by lazy { pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
+    private val hasMicrophone by lazy { pm.hasSystemFeature(PackageManager.FEATURE_MICROPHONE) }
+
     private val relevantPermissions = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.BLUETOOTH_SCAN,
@@ -279,20 +289,20 @@ class AndroidCapabilityDetector @Inject constructor(
         val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager?
         val features = AndroidDeviceFeatures(
             sdkInt = Build.VERSION.SDK_INT,
-            hasWifi = pm.hasSystemFeature(PackageManager.FEATURE_WIFI),
+            hasWifi = hasWifi,
             wifiEnabled = runCatching { wifiManager?.isWifiEnabled == true }.getOrDefault(false),
-            hasWifiDirect = pm.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT),
-            hasWifiAware = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && pm.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE),
+            hasWifiDirect = hasWifiDirect,
+            hasWifiAware = hasWifiAware,
             wifiAwareAvailable = runCatching { awareManager?.isAvailable == true }.getOrDefault(false),
-            hasBluetoothLe = pm.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE),
+            hasBluetoothLe = hasBluetoothLe,
             bluetoothEnabled = bluetoothEnabled,
-            hasNfc = pm.hasSystemFeature(PackageManager.FEATURE_NFC),
-            hasNfcHostCardEmulation = pm.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION),
+            hasNfc = hasNfc,
+            hasNfcHostCardEmulation = hasNfcHostCardEmulation,
             nfcEnabled = runCatching { nfcAdapter?.isEnabled == true }.getOrDefault(false),
-            hasUwb = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && pm.hasSystemFeature(PackageManager.FEATURE_UWB),
+            hasUwb = hasUwb,
             hasConsumerIrEmitter = runCatching { irManager?.hasIrEmitter() == true }.getOrDefault(false),
-            hasCamera = pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY),
-            hasMicrophone = pm.hasSystemFeature(PackageManager.FEATURE_MICROPHONE),
+            hasCamera = hasCamera,
+            hasMicrophone = hasMicrophone,
             locationEnabled = runCatching {
                 when {
                     locationManager == null -> false

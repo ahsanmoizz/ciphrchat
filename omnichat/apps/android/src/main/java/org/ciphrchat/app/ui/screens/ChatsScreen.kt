@@ -10,8 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +32,7 @@ fun ChatsScreen(
     onAddContact: () -> Unit,
     viewModel: ChatsViewModel = hiltViewModel()
 ) {
-    val conversations by viewModel.conversations.collectAsState()
+    val conversations by viewModel.conversations.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -140,7 +140,7 @@ private fun ConversationRow(
     }
 }
 
+private val conversationTimeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
 private fun formatTime(epochMs: Long): String {
-    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return sdf.format(Date(epochMs))
+    return conversationTimeFormat.get()?.format(Date(epochMs)) ?: ""
 }

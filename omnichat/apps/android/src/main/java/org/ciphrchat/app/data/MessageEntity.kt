@@ -1,6 +1,7 @@
 package org.ciphrchat.app.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Dao
 import androidx.room.Insert
@@ -11,7 +12,13 @@ import kotlinx.coroutines.flow.Flow
 import org.ciphrchat.app.messaging.MessageDirection
 import org.ciphrchat.app.messaging.MessageStatus
 
-@Entity(tableName = "messages")
+@Entity(
+    tableName = "messages",
+    indices = [
+        Index(value = ["conversationId", "createdAtEpochMs"]),
+        Index(value = ["status"])
+    ]
+)
 data class MessageEntity(
     @PrimaryKey
     val id: String,
@@ -36,6 +43,17 @@ data class MessageEntity(
 interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :messageId LIMIT 1")
     suspend fun findById(messageId: String): MessageEntity?
+
+    @Query("""
+        SELECT m.* FROM messages m
+        INNER JOIN (
+            SELECT conversationId, MAX(createdAtEpochMs) AS maxCreatedAt
+            FROM messages
+            GROUP BY conversationId
+        ) latest ON m.conversationId = latest.conversationId AND m.createdAtEpochMs = latest.maxCreatedAt
+        ORDER BY m.createdAtEpochMs DESC
+    """)
+    fun getLatestMessagesPerConversation(): Flow<List<MessageEntity>>
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAtEpochMs ASC")
     fun getMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>

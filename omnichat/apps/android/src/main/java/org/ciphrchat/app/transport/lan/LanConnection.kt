@@ -28,6 +28,9 @@ class LanConnection @Inject constructor(
     private val serverSockets = ConcurrentHashMap<Int, ServerSocket>()
 
     suspend fun startServer(port: Int, transport: TransportKind = TransportKind.WIFI_LAN) = withContext(Dispatchers.IO) {
+        if (serverSockets[port]?.isClosed == false) {
+            return@withContext
+        }
         runCatching {
             stopServer(port)
             val server = ServerSocket(port)

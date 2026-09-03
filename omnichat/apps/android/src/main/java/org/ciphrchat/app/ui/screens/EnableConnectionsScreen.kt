@@ -12,7 +12,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
@@ -36,7 +36,7 @@ fun EnableConnectionsScreen(
 ) {
     var permissionMessage by remember { mutableStateOf<String?>(null) }
     val scrollState = rememberScrollState()
-    val states by transportStates.collectAsState()
+    val states by transportStates.collectAsStateWithLifecycle()
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->

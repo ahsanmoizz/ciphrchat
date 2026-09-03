@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -269,8 +270,8 @@ fun CiphrChatApp(viewModel: OnboardingViewModel = hiltViewModel()) {
         showBackupPassword = uri != null
     }
 
-    val isIpPrivacyEnabled by viewModel.isIpPrivacyEnabled.collectAsState()
-    val callState by viewModel.callState.collectAsState()
+    val isIpPrivacyEnabled by viewModel.isIpPrivacyEnabled.collectAsStateWithLifecycle()
+    val callState by viewModel.callState.collectAsStateWithLifecycle()
 
     LaunchedEffect(viewModel.restoreCompleted) {
         if (viewModel.restoreCompleted) {

@@ -77,22 +77,31 @@ class AttachmentStore @Inject constructor(@ApplicationContext private val contex
         return !target.exists() || target.delete()
     }
 
+    @Volatile private var cachedKey: SecretKey? = null
+    @Volatile private var cachedLegacyKey: SecretKey? = null
+
     private fun key(): SecretKey {
+        cachedKey?.let { return it }
         val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+        val existing = store.getKey(KEY_ALIAS, null) as? SecretKey
+        val key = existing ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setRandomizedEncryptionRequired(false)
                 .build())
         }.generateKey()
+        cachedKey = key
+        return key
     }
 
     private fun legacyKey(): SecretKey {
+        cachedLegacyKey?.let { return it }
         val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        return store.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
+        val key = store.getKey(LEGACY_KEY_ALIAS, null) as? SecretKey
             ?: error("Legacy attachment key is unavailable")
+        cachedLegacyKey = key
+        return key
     }
 
     private fun decryptWithKey(key: SecretKey, iv: ByteArray, ciphertext: ByteArray): ByteArray =

@@ -11,7 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -40,7 +40,7 @@ fun ConnectScreen(
     var invitation by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
     val states = if (transportStates != null) {
-        val collected by transportStates.collectAsState()
+        val collected by transportStates.collectAsStateWithLifecycle()
         collected
     } else {
         emptyList()

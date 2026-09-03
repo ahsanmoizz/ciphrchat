@@ -67,6 +67,7 @@ class PersistentMessageRepository @Inject constructor(
     private val outboxScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeInFlightMessages = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val outboxSignal = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 64)
+    private val decryptedBodyCache = android.util.LruCache<String, String>(2000)
 
     init {
         networkScope.launch {
@@ -244,18 +245,18 @@ class PersistentMessageRepository @Inject constructor(
     }
 
     override fun conversations(): Flow<List<ConversationSummary>> = combine(
-        dao.getAllMessages(),
+        dao.getLatestMessagesPerConversation(),
         contacts.observe()
-    ) { messages, contactEntities ->
+    ) { latestMessages, contactEntities ->
         val contactNames = contactEntities.associateBy { it.contactId }
-        messages.groupBy { it.conversationId }.map { (conversationId, items) ->
-            val last = items.maxByOrNull { it.createdAtEpochMs }
+        latestMessages.map { message ->
+            val conversationId = message.conversationId
             ConversationSummary(
                 id = conversationId,
                 contactName = contactNames[conversationId]?.displayName ?: "Contact ${conversationId.takeLast(8)}",
                 contactId = conversationId,
-                lastMessage = last?.let(::decryptBody).orEmpty(),
-                lastMessageEpochMs = last?.createdAtEpochMs ?: 0L
+                lastMessage = decryptBody(message),
+                lastMessageEpochMs = message.createdAtEpochMs
             )
         }.sortedByDescending { it.lastMessageEpochMs }
     }
@@ -395,6 +396,9 @@ class PersistentMessageRepository @Inject constructor(
                 require(conversationId.isNotBlank()) { "Conversation is unavailable" }
                 val messages = dao.listMessagesForConversation(conversationId)
                 val deleted = dao.deleteConversation(conversationId)
+                synchronized(decryptedBodyCache) {
+                    messages.forEach { decryptedBodyCache.remove(it.id) }
+                }
                 messages.mapNotNull { it.attachmentStoragePath }
                     .filter { !it.startsWith("large_file:") }
                     .distinct()
@@ -416,6 +420,10 @@ class PersistentMessageRepository @Inject constructor(
                     }
                 }
                 dao.deleteMessageById(messageId)
+                synchronized(decryptedBodyCache) {
+                    decryptedBodyCache.remove(messageId)
+                }
+                Unit
             }
         }
 
@@ -558,6 +566,10 @@ class PersistentMessageRepository @Inject constructor(
         val persistDuration = System.currentTimeMillis() - persistStart
         MessageTimingTracker.recordPersist(messageId, persistDuration)
 
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(messageId, body)
+        }
+
         // Asynchronously dispatch via Outbox without blocking foreground UI
         triggerOutboxFlush()
 
@@ -582,9 +594,18 @@ class PersistentMessageRepository @Inject constructor(
         isForwarded = isForwarded
     )
 
-    private fun decryptBody(entity: MessageEntity): String = runCatching {
-        contentCipher.decrypt(entity.body)
-    }.getOrElse { "Encrypted message" }
+    private fun decryptBody(entity: MessageEntity): String {
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.get(entity.id)?.let { return it }
+        }
+        val decrypted = runCatching {
+            contentCipher.decrypt(entity.body)
+        }.getOrElse { "Encrypted message" }
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(entity.id, decrypted)
+        }
+        return decrypted
+    }
 
     private suspend fun receive(peerId: String, wirePayload: ByteArray): Boolean =
         runCatching {
@@ -799,13 +820,17 @@ class PersistentMessageRepository @Inject constructor(
             attachmentStore.save(it.fileName, it.mimeType, it.bytes)
         }
         val localId = identity.current()?.publicId ?: "local"
+        val plainText = decoded.text ?: "Attachment: ${attachment?.fileName ?: "file"}"
+        synchronized(decryptedBodyCache) {
+            decryptedBodyCache.put(messageId, plainText)
+        }
         dao.insertMessage(
             MessageEntity(
                 id = messageId,
                 conversationId = senderId,
                 senderId = senderId,
                 recipientId = localId,
-                body = contentCipher.encrypt(decoded.text ?: "Attachment: ${attachment?.fileName ?: "file"}"),
+                body = contentCipher.encrypt(plainText),
                 encryptedPayload = ciphertext,
                 createdAtEpochMs = createdAtEpochMs,
                 direction = MessageDirection.INCOMING,
